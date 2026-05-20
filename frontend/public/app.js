@@ -388,6 +388,7 @@ registerRoute('#/users', async (content) => {
         <h1 class="text-2xl font-bold">Mitarbeiter (${users.length})</h1>
         <div class="flex gap-2">
           <input id="user-search" placeholder="Suche..." class="px-3 py-2 border rounded-lg text-sm"/>
+          <button id="csv-import" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg font-semibold">CSV-Import</button>
           <button id="new-user" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">+ Mitarbeiter</button>
         </div>
       </div>
@@ -421,8 +422,72 @@ registerRoute('#/users', async (content) => {
   };
 
   document.getElementById('new-user').onclick = () => openUserModal(null);
+  document.getElementById('csv-import').onclick = () => openCsvImportModal();
   bindUsersRowEvents();
 });
+
+async function openCsvImportModal() {
+  const body = el(`
+    <div class="space-y-4">
+      <div class="bg-blue-50 border border-blue-200 rounded p-3 text-sm">
+        <p class="font-medium mb-1">Format</p>
+        <p class="text-slate-600">CSV mit Header-Zeile. Trennzeichen: Komma, Semikolon oder Tab. Pflicht-Spalten:
+          <code class="bg-white px-1 rounded">windows_username</code> und
+          <code class="bg-white px-1 rounded">display_name</code> (oder dt. Aliase wie „Anzeigename").</p>
+        <p class="text-slate-600 mt-1">Optionale Spalten: email, job_title, department, company, office_location, phone, mobile, fax, street, city, postal_code, country, website</p>
+        <p class="text-slate-600 mt-1">Bei vorhandenem <code class="bg-white px-1 rounded">windows_username</code> wird der Mitarbeiter aktualisiert (Upsert).</p>
+      </div>
+      <input id="csv-file" type="file" accept=".csv,text/csv" class="block w-full text-sm"/>
+      <div>
+        <label class="text-xs uppercase text-slate-500">Oder direkt einfuegen</label>
+        <textarea id="csv-text" rows="8" class="code w-full px-3 py-2 border rounded-lg" placeholder="windows_username,display_name,email,job_title&#10;jmueller,Jens Mueller,j.mueller@example.com,Vertriebsleiter"></textarea>
+      </div>
+      <div id="csv-result" class="hidden bg-slate-50 border rounded p-3 text-sm"></div>
+      <div class="flex justify-end gap-2 pt-2 border-t">
+        <button data-action="dry-run" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg">Test-Lauf (nichts speichern)</button>
+        <button data-action="import" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Importieren</button>
+      </div>
+    </div>
+  `);
+  const modal = openModal('Mitarbeiter aus CSV importieren', body, { wide: true });
+
+  body.querySelector('#csv-file').onchange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { body.querySelector('#csv-text').value = String(reader.result || ''); };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  async function run(dry) {
+    const csv = body.querySelector('#csv-text').value;
+    if (!csv.trim()) return toast('CSV ist leer', 'error');
+    const resBox = body.querySelector('#csv-result');
+    resBox.className = 'bg-slate-50 border rounded p-3 text-sm';
+    resBox.textContent = 'Verarbeite...';
+    try {
+      const r = await api.post('/api/users/import-csv', { csv, dry_run: dry });
+      resBox.innerHTML = `
+        <div class="font-semibold mb-1">${dry ? 'Test-Lauf' : 'Import'} fertig</div>
+        <ul class="space-y-0.5">
+          <li><strong>${r.created}</strong> neu angelegt${dry ? ' (waeren)' : ''}</li>
+          <li><strong>${r.updated}</strong> aktualisiert${dry ? ' (waeren)' : ''}</li>
+          <li><strong>${r.skipped}</strong> uebersprungen</li>
+          <li><strong>${r.errors.length}</strong> Fehler</li>
+        </ul>
+        ${r.errors.length ? `<details class="mt-2"><summary class="cursor-pointer text-red-600">Fehler-Details</summary>
+          <pre class="text-xs bg-white border p-2 mt-1 max-h-40 overflow-auto">${esc(JSON.stringify(r.errors, null, 2))}</pre>
+        </details>` : ''}
+      `;
+      if (!dry) {
+        toast(`Import OK: ${r.created} neu, ${r.updated} aktualisiert`, 'success');
+        setTimeout(() => { modal.close(); route(); }, 1500);
+      }
+    } catch (err) { toast(err.message, 'error'); resBox.classList.add('hidden'); }
+  }
+  body.querySelector('[data-action=dry-run]').onclick = () => run(true);
+  body.querySelector('[data-action=import]').onclick = () => run(false);
+}
 
 function renderUsersTable(users) {
   if (!users.length) return '<tr><td colspan="7" class="px-5 py-6 text-slate-400 text-center">Keine Mitarbeiter angelegt</td></tr>';
@@ -769,7 +834,16 @@ async function openTemplateModal(id, variables) {
     });
   };
 
-  function refreshPreview() {
+  let cachedLogoTag = null;
+  async function refreshPreview() {
+    if (cachedLogoTag === null) {
+      try {
+        const s = await api.get('/api/settings');
+        cachedLogoTag = s.company_logo_asset_id
+          ? `<img src="/api/assets/${s.company_logo_asset_id}/file" alt="Logo" style="max-width:${s.company_logo_width || 150}px;height:auto;" />`
+          : '';
+      } catch { cachedLogoTag = ''; }
+    }
     const html = ed.getContents();
     const sample = {
       displayName: 'Max Mustermann', jobTitle: 'Geschaeftsfuehrer', department: 'Vertrieb',
@@ -777,6 +851,7 @@ async function openTemplateModal(id, variables) {
       phone: '+49 6341 1234567', mobile: '+49 170 1234567', fax: '+49 6341 1234568',
       street: 'Musterstr. 1', city: 'Musterstadt', postalCode: '12345', country: 'DE',
       website: 'https://example.com',
+      logo: cachedLogoTag,
     };
     const rendered = html.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => sample[k] != null ? sample[k] : '');
     body.querySelector('#tpl-preview').innerHTML = rendered;
@@ -1056,6 +1131,64 @@ function formatBytes(b) {
   return (b / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+// ---------- View: Deploy-Matrix ----------
+registerRoute('#/matrix', async (content) => {
+  const data = await api.get('/api/audit/matrix');
+  content.innerHTML = '';
+  content.appendChild(el(`
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold">Deploy-Status (${data.users.length} User × ${data.servers.length} Server)</h1>
+        <div class="flex gap-2">
+          <button id="matrix-refresh" class="px-3 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm">Aktualisieren</button>
+          <button id="matrix-deploy-all" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Alle deployen</button>
+        </div>
+      </div>
+      <p class="text-sm text-slate-500">Letzter Stand pro User + Server. Klick auf eine Zeile = Mitarbeiter-Deploy. Klick auf Zell-Status = Detail-Tooltip mit Nachricht.</p>
+
+      <div class="bg-white rounded-xl shadow-sm overflow-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 sticky top-0">
+            <tr>
+              <th class="text-left px-4 py-2 sticky left-0 bg-slate-50">Mitarbeiter</th>
+              <th class="text-left px-4 py-2">Abteilung</th>
+              ${data.servers.map(s => `<th class="text-left px-4 py-2 whitespace-nowrap">${esc(s.name)}<br><span class="text-xs text-slate-400 font-normal">${esc(s.hostname)}</span></th>`).join('')}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.users.map(u => `
+              <tr class="border-t hover:bg-slate-50">
+                <td class="px-4 py-2 font-medium sticky left-0 bg-white">${esc(u.display_name)}<div class="text-xs text-slate-500">${esc(u.windows_username)}${u.enabled ? '' : ' <span class="text-amber-600">[inaktiv]</span>'}</div></td>
+                <td class="px-4 py-2 text-slate-500">${esc(u.department || '')}</td>
+                ${data.servers.map(s => {
+                  const cell = data.matrix[u.id]?.[s.id];
+                  if (!cell) return '<td class="px-4 py-2 text-slate-300">—</td>';
+                  return `<td class="px-4 py-2" title="${esc(cell.message || '')} (${esc(cell.created_at)})">${statusBadge(cell.status)}<div class="text-xs text-slate-400 mt-0.5">${esc(cell.created_at.split(' ')[1] || cell.created_at)}</div></td>`;
+                }).join('')}
+                <td class="px-4 py-2 text-right">
+                  <button data-deploy-user="${u.id}" class="text-emerald-600 hover:underline text-sm whitespace-nowrap">Re-Deploy</button>
+                </td>
+              </tr>
+            `).join('') || `<tr><td colspan="${data.servers.length + 3}" class="px-5 py-12 text-slate-400 text-center">Keine Daten</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `));
+
+  document.getElementById('matrix-refresh').onclick = () => route();
+  document.getElementById('matrix-deploy-all').onclick = async () => {
+    if (!await confirm('Alle Mitarbeiter auf alle Server deployen?')) return;
+    try {
+      const r = await api.post('/api/deploy/all', {});
+      toast(`Fertig: ${r.by_status.ok || 0} OK / ${r.by_status.skipped || 0} skipped / ${r.by_status.error || 0} Fehler`, 'success');
+      route();
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  document.querySelectorAll('[data-deploy-user]').forEach(b => b.onclick = () => deploySingleUser(b.dataset.deployUser));
+});
+
 // ---------- View: Audit ----------
 registerRoute('#/audit', async (content) => {
   const [audit, deploys] = await Promise.all([
@@ -1126,6 +1259,236 @@ registerRoute('#/audit', async (content) => {
       </div>
     </div>
   `));
+});
+
+// ---------- View: Settings ----------
+registerRoute('#/settings', async (content) => {
+  const [me, admins, settings, assets] = await Promise.all([
+    api.get('/api/auth/me'),
+    api.get('/api/auth/admins'),
+    api.get('/api/settings'),
+    api.get('/api/assets'),
+  ]);
+  const logoAsset = settings.company_logo_asset_id
+    ? assets.find(a => a.id == settings.company_logo_asset_id) : null;
+  const logoWidth = settings.company_logo_width || '150';
+  const autoEnabled = settings.auto_deploy_enabled === '1' || settings.auto_deploy_enabled === 'true';
+  const autoTime = settings.auto_deploy_time || '03:00';
+
+  content.innerHTML = '';
+  content.appendChild(el(`
+    <div class="space-y-6 max-w-3xl">
+      <h1 class="text-2xl font-bold">Einstellungen</h1>
+
+      <!-- Firmenlogo -->
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b"><h2 class="font-semibold">Firmenlogo (zentral)</h2></div>
+        <div class="p-5 space-y-3">
+          <p class="text-sm text-slate-500">Wird in Templates als <code class="bg-slate-100 px-1 rounded">{{logo}}</code> referenziert. Aenderung wirkt sofort in allen Templates.</p>
+          <div class="flex items-center gap-4">
+            <div class="w-32 h-32 bg-slate-50 border rounded flex items-center justify-center overflow-hidden">
+              ${logoAsset ? `<img src="/api/assets/${logoAsset.id}/file" class="max-w-full max-h-full object-contain"/>` : '<span class="text-xs text-slate-400">Kein Logo</span>'}
+            </div>
+            <div class="space-y-2 flex-1">
+              <div class="text-sm">${logoAsset ? esc(logoAsset.name) : '<span class="text-slate-400">Noch kein Logo gesetzt</span>'}</div>
+              <div class="flex items-center gap-2">
+                <label class="text-xs text-slate-500">Anzeigebreite:</label>
+                <input id="logo-width" type="number" min="50" max="800" value="${esc(logoWidth)}" class="px-2 py-1 border rounded w-24 text-sm"/>
+                <span class="text-xs text-slate-500">px</span>
+              </div>
+              <div class="flex gap-2">
+                <button id="logo-pick" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">Logo waehlen</button>
+                ${logoAsset ? '<button id="logo-clear" class="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-sm rounded-lg">Entfernen</button>' : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Auto-Deploy -->
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b"><h2 class="font-semibold">Auto-Deploy (Scheduler)</h2></div>
+        <div class="p-5 space-y-3">
+          <p class="text-sm text-slate-500">Deployt alle aktiven Mitarbeiter auf alle aktiven Server taeglich zur eingestellten Zeit.</p>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" id="auto-enabled" ${autoEnabled ? 'checked' : ''}/>
+            <span>Auto-Deploy aktiv</span>
+          </label>
+          <div class="flex items-center gap-2">
+            <label class="text-sm text-slate-600">Zeitpunkt:</label>
+            <input type="time" id="auto-time" value="${esc(autoTime)}" class="px-2 py-1 border rounded text-sm"/>
+            <span class="text-xs text-slate-500">Server-Lokalzeit</span>
+          </div>
+          <button id="auto-save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-sm">Speichern</button>
+        </div>
+      </div>
+
+      <!-- Eigene Daten -->
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b"><h2 class="font-semibold">Mein Account</h2></div>
+        <div class="p-5 space-y-4">
+          <div>
+            <label class="text-xs uppercase text-slate-500">Eingeloggt als</label>
+            <div class="font-medium">${esc(me.username)}</div>
+          </div>
+
+          <div class="border-t pt-4">
+            <label class="text-xs uppercase text-slate-500">Username aendern</label>
+            <div class="flex gap-2 mt-1">
+              <input id="my-new-username" value="${esc(me.username)}" class="flex-1 px-3 py-2 border rounded-lg"/>
+              <button id="change-username" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Speichern</button>
+            </div>
+          </div>
+
+          <div class="border-t pt-4">
+            <label class="text-xs uppercase text-slate-500">Passwort aendern</label>
+            <div class="flex gap-2 mt-1">
+              <input id="my-new-password" type="password" autocomplete="new-password" placeholder="Neues Passwort (min. 6 Zeichen)" class="flex-1 px-3 py-2 border rounded-lg"/>
+              <button id="change-password" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Speichern</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Andere Admins -->
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b flex items-center justify-between">
+          <h2 class="font-semibold">Admin-Accounts (${admins.length})</h2>
+          <button id="new-admin" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-semibold">+ Admin</button>
+        </div>
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="text-left px-5 py-2">Username</th>
+              <th class="text-left px-5 py-2">Erstellt</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${admins.map(a => `
+              <tr class="border-t">
+                <td class="px-5 py-2 font-medium">
+                  ${esc(a.username)}${a.id === me.id ? ' <span class="text-xs text-slate-400">(du)</span>' : ''}
+                </td>
+                <td class="px-5 py-2 text-slate-500">${esc(a.created_at)}</td>
+                <td class="px-5 py-2 text-right whitespace-nowrap">
+                  <button data-reset="${a.id}" data-user="${esc(a.username)}" class="text-blue-600 hover:underline mr-3">Passwort zuruecksetzen</button>
+                  ${a.id !== me.id ? `<button data-del-admin="${a.id}" data-user="${esc(a.username)}" class="text-red-600 hover:underline">Loeschen</button>` : ''}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `));
+
+  // Logo-Handler
+  document.getElementById('logo-pick').onclick = () => {
+    openAssetPicker(async (asset) => {
+      if (!asset) return;
+      const width = document.getElementById('logo-width').value || 150;
+      try {
+        await api.put('/api/settings/logo', { asset_id: asset.id, width, alt: asset.name });
+        toast('Logo gesetzt', 'success');
+        route();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  };
+  const logoClearBtn = document.getElementById('logo-clear');
+  if (logoClearBtn) logoClearBtn.onclick = async () => {
+    try {
+      await api.put('/api/settings/logo', { asset_id: null });
+      toast('Logo entfernt', 'success');
+      route();
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  // Auto-Deploy-Handler
+  document.getElementById('auto-save').onclick = async () => {
+    const enabled = document.getElementById('auto-enabled').checked ? '1' : '0';
+    const time = document.getElementById('auto-time').value || '03:00';
+    try {
+      await api.put('/api/settings', { auto_deploy_enabled: enabled, auto_deploy_time: time });
+      toast('Auto-Deploy gespeichert', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  document.getElementById('change-username').onclick = async () => {
+    const username = document.getElementById('my-new-username').value.trim();
+    if (!username) return toast('Username fehlt', 'error');
+    try {
+      await api.put(`/api/auth/admins/${me.id}/username`, { username });
+      toast('Username geaendert', 'success');
+      state.currentUser = await api.get('/api/auth/me');
+      document.getElementById('current-user').textContent = state.currentUser.username;
+      route();
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  document.getElementById('change-password').onclick = async () => {
+    const password = document.getElementById('my-new-password').value;
+    if (password.length < 6) return toast('Passwort min. 6 Zeichen', 'error');
+    try {
+      await api.put(`/api/auth/admins/${me.id}/password`, { password });
+      toast('Passwort geaendert', 'success');
+      document.getElementById('my-new-password').value = '';
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  document.getElementById('new-admin').onclick = () => {
+    const body = el(`
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs uppercase text-slate-500">Username</label>
+          <input id="na-username" autocomplete="off" class="w-full px-3 py-2 border rounded-lg"/>
+        </div>
+        <div>
+          <label class="text-xs uppercase text-slate-500">Passwort (min. 6 Zeichen)</label>
+          <input id="na-password" type="password" autocomplete="new-password" class="w-full px-3 py-2 border rounded-lg"/>
+        </div>
+        <div class="flex justify-end gap-2 pt-2 border-t">
+          <button data-action="save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Anlegen</button>
+        </div>
+      </div>`);
+    const m = openModal('Neuen Admin anlegen', body);
+    body.querySelector('[data-action=save]').onclick = async () => {
+      const username = body.querySelector('#na-username').value.trim();
+      const password = body.querySelector('#na-password').value;
+      try {
+        await api.post('/api/auth/admins', { username, password });
+        toast('Admin angelegt', 'success');
+        m.close();
+        route();
+      } catch (err) { toast(err.message, 'error'); }
+    };
+  };
+
+  document.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
+    const body = el(`
+      <div class="space-y-3">
+        <p class="text-slate-700">Neues Passwort fuer <strong>${esc(b.dataset.user)}</strong>:</p>
+        <input id="rp-password" type="password" autocomplete="new-password" class="w-full px-3 py-2 border rounded-lg" placeholder="min. 6 Zeichen"/>
+        <div class="flex justify-end gap-2 pt-2 border-t">
+          <button data-action="save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Setzen</button>
+        </div>
+      </div>`);
+    const m = openModal('Passwort zuruecksetzen', body);
+    body.querySelector('[data-action=save]').onclick = async () => {
+      const password = body.querySelector('#rp-password').value;
+      try {
+        await api.put(`/api/auth/admins/${b.dataset.reset}/password`, { password });
+        toast('Passwort gesetzt', 'success');
+        m.close();
+      } catch (err) { toast(err.message, 'error'); }
+    };
+  });
+
+  document.querySelectorAll('[data-del-admin]').forEach(b => b.onclick = async () => {
+    if (!await confirm(`Admin "${b.dataset.user}" wirklich loeschen?`)) return;
+    try { await api.del('/api/auth/admins/' + b.dataset.delAdmin); toast('Geloescht', 'success'); route(); }
+    catch (err) { toast(err.message, 'error'); }
+  });
 });
 
 // ---------- Boot ----------

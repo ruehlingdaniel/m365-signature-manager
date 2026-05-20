@@ -108,6 +108,149 @@ userRoutes.post('/bulk-assign', requireAuth, (req, res) => {
   res.json({ ok: true, count: user_ids.length });
 });
 
+// Einfacher CSV-Parser fuer "RFC 4180-ish" — Trennzeichen erkannt aus erster Zeile (komma, semikolon, tab).
+function parseCsv(text) {
+  const stripped = text.replace(/^﻿/, ''); // BOM weg
+  const firstLine = stripped.split(/\r?\n/, 1)[0];
+  const delim = firstLine.includes(';') ? ';' : firstLine.includes('\t') ? '\t' : ',';
+  const rows = [];
+  let cur = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < stripped.length; i++) {
+    const c = stripped[i];
+    if (inQuotes) {
+      if (c === '"' && stripped[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') inQuotes = false;
+      else cell += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === delim) { cur.push(cell); cell = ''; }
+      else if (c === '\r') { /* skip */ }
+      else if (c === '\n') { cur.push(cell); rows.push(cur); cur = []; cell = ''; }
+      else cell += c;
+    }
+  }
+  if (cell !== '' || cur.length) { cur.push(cell); rows.push(cur); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
+// Spalten-Aliase auf canonical names. Toleriert deutsche und englische Header.
+const COL_ALIASES = {
+  windows_username: ['windows_username', 'username', 'login', 'windowsuser', 'samaccountname', 'user'],
+  display_name: ['display_name', 'name', 'anzeigename', 'displayname', 'vollname'],
+  email: ['email', 'mail', 'e-mail'],
+  job_title: ['job_title', 'position', 'titel', 'jobtitle', 'rolle'],
+  department: ['department', 'abteilung', 'dept'],
+  company: ['company', 'firma', 'unternehmen'],
+  office_location: ['office_location', 'standort', 'office', 'buero'],
+  phone: ['phone', 'telefon', 'tel'],
+  mobile: ['mobile', 'mobil', 'handy'],
+  fax: ['fax', 'telefax'],
+  street: ['street', 'strasse', 'straße', 'adresse'],
+  city: ['city', 'stadt', 'ort'],
+  postal_code: ['postal_code', 'plz', 'zip', 'postleitzahl'],
+  country: ['country', 'land'],
+  website: ['website', 'webseite', 'homepage', 'url'],
+};
+
+function mapHeaders(headers) {
+  const norm = headers.map(h => (h || '').trim().toLowerCase());
+  const mapping = {};
+  for (const [canonical, aliases] of Object.entries(COL_ALIASES)) {
+    const idx = norm.findIndex(h => aliases.includes(h));
+    if (idx >= 0) mapping[canonical] = idx;
+  }
+  return mapping;
+}
+
+// POST /api/users/import-csv  body: { csv: "<text>", dry_run: bool }
+userRoutes.post('/import-csv', requireAuth, (req, res) => {
+  const { csv, dry_run } = req.body || {};
+  if (typeof csv !== 'string' || !csv.trim()) {
+    return res.status(400).json({ error: 'csv-Text fehlt' });
+  }
+  const rows = parseCsv(csv);
+  if (rows.length < 2) return res.status(400).json({ error: 'CSV braucht Header + mindestens eine Zeile' });
+  const headers = rows[0];
+  const mapping = mapHeaders(headers);
+  if (mapping.windows_username === undefined || mapping.display_name === undefined) {
+    return res.status(400).json({
+      error: 'Pflicht-Spalten "windows_username" und "display_name" fehlen (akzeptiert auch deutsche Namen wie "Anzeigename")',
+      headers_recognized: Object.keys(mapping),
+    });
+  }
+
+  const result = { total: rows.length - 1, created: 0, updated: 0, skipped: 0, errors: [] };
+  const existsStmt = db.prepare('SELECT id FROM signature_users WHERE windows_username = ?');
+  const insertStmt = db.prepare(`INSERT INTO signature_users
+    (windows_username, display_name, email, job_title, department, company, office_location,
+     phone, mobile, fax, street, city, postal_code, country, website, enabled, signature_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Firma_Standard')`);
+  const updateStmt = db.prepare(`UPDATE signature_users SET
+    display_name = ?, email = ?, job_title = ?, department = ?, company = ?, office_location = ?,
+    phone = ?, mobile = ?, fax = ?, street = ?, city = ?, postal_code = ?, country = ?, website = ?,
+    updated_at = CURRENT_TIMESTAMP
+    WHERE windows_username = ?`);
+
+  function rowValue(row, key) {
+    const idx = mapping[key];
+    return idx === undefined ? '' : (row[idx] || '').trim();
+  }
+
+  const tx = db.transaction(() => {
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const username = rowValue(row, 'windows_username');
+      const displayName = rowValue(row, 'display_name');
+      if (!username || !displayName) {
+        result.skipped++;
+        result.errors.push({ line: i + 1, error: 'windows_username oder display_name leer' });
+        continue;
+      }
+      const vals = [
+        displayName,
+        rowValue(row, 'email'),
+        rowValue(row, 'job_title'),
+        rowValue(row, 'department'),
+        rowValue(row, 'company'),
+        rowValue(row, 'office_location'),
+        rowValue(row, 'phone'),
+        rowValue(row, 'mobile'),
+        rowValue(row, 'fax'),
+        rowValue(row, 'street'),
+        rowValue(row, 'city'),
+        rowValue(row, 'postal_code'),
+        rowValue(row, 'country'),
+        rowValue(row, 'website'),
+      ];
+      const existing = existsStmt.get(username);
+      try {
+        if (existing) {
+          if (!dry_run) updateStmt.run(...vals, username);
+          result.updated++;
+        } else {
+          if (!dry_run) insertStmt.run(username, ...vals);
+          result.created++;
+        }
+      } catch (err) {
+        result.errors.push({ line: i + 1, username, error: err.message });
+      }
+    }
+    if (dry_run) throw new Error('__DRY_RUN__'); // rollback
+  });
+
+  try { tx(); }
+  catch (err) {
+    if (err.message !== '__DRY_RUN__') throw err;
+  }
+
+  if (!dry_run) {
+    logAudit(req, 'user.import_csv', { details: { created: result.created, updated: result.updated, errors: result.errors.length } });
+  }
+  res.json({ ...result, dry_run: !!dry_run });
+});
+
 // Live-Preview: rendert die Signatur fuer einen User mit dem aktuell zugewiesenen Template.
 userRoutes.get('/:id/preview', requireAuth, (req, res) => {
   const user = db.prepare('SELECT * FROM signature_users WHERE id = ?').get(req.params.id);

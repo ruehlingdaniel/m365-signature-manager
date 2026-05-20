@@ -17,6 +17,8 @@ import { serverRoutes } from './routes/servers.js';
 import { deployRoutes } from './routes/deploy.js';
 import { auditRoutes } from './routes/audit.js';
 import { assetRoutes } from './routes/assets.js';
+import { settingsRoutes } from './routes/settings.js';
+import { startScheduler } from './lib/scheduler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -32,14 +34,20 @@ const app = express();
 app.set('trust proxy', 1);
 
 app.use(helmet({
+  // HSTS aus, da App in der Regel intern via HTTP laeuft
+  hsts: false,
   contentSecurityPolicy: {
-    useDefaults: true,
+    useDefaults: false,
     directives: {
+      'default-src': ["'self'"],
       'img-src': ["'self'", 'data:', 'blob:', 'https://cdn.jsdelivr.net'],
-      'script-src': ["'self'", 'https://cdn.tailwindcss.com', 'https://cdn.jsdelivr.net', "'unsafe-inline'"],
+      'script-src': ["'self'", 'https://cdn.tailwindcss.com', 'https://cdn.jsdelivr.net', "'unsafe-inline'", "'unsafe-eval'"],
       'style-src': ["'self'", 'https://cdn.tailwindcss.com', 'https://cdn.jsdelivr.net', "'unsafe-inline'"],
       'font-src': ["'self'", 'https://cdn.jsdelivr.net', 'data:'],
       'connect-src': ["'self'"],
+      'frame-ancestors': ["'self'"],
+      'object-src': ["'none'"],
+      'base-uri': ["'self'"],
     },
   },
 }));
@@ -58,6 +66,7 @@ app.use('/api/servers', serverRoutes);
 app.use('/api/deploy', deployRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/assets', assetRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Frontend (vanilla single-page) liegt unter ../frontend/public
 const FRONTEND_DIR = join(__dirname, '..', 'frontend', 'public');
@@ -69,4 +78,5 @@ if (existsSync(FRONTEND_DIR)) {
 const PORT = parseInt(process.env.PORT || '4000', 10);
 app.listen(PORT, () => {
   console.log(`[server] M365 Signature Manager listening on :${PORT}`);
+  startScheduler();
 });

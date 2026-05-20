@@ -144,18 +144,15 @@ deployRoutes.post('/user/:id', requireAuth, async (req, res) => {
   res.json({ user: user.windows_username, results });
 });
 
-// POST /api/deploy/all   body: { server_ids?: [int] }
-// Deployt ALLE aktivierten User auf gewaehlte Server.
-deployRoutes.post('/all', requireAuth, async (req, res) => {
-  const serverIds = Array.isArray(req.body?.server_ids) && req.body.server_ids.length
-    ? req.body.server_ids : null;
-  const servers = serverIds
+// Re-usable Deploy-Funktion (z.B. fuer Scheduler). Liefert Summary oder { error }.
+export async function runDeployAll({ serverIds } = {}) {
+  const servers = Array.isArray(serverIds) && serverIds.length
     ? serverIds.map(getServerForDeploy).filter(Boolean)
     : getAllEnabledServers();
-  if (servers.length === 0) return res.status(400).json({ error: 'keine aktiven Server' });
+  if (servers.length === 0) return { error: 'keine aktiven Server' };
 
   const users = db.prepare('SELECT * FROM signature_users WHERE enabled = 1').all();
-  if (users.length === 0) return res.status(400).json({ error: 'keine aktiven User' });
+  if (users.length === 0) return { error: 'keine aktiven User' };
 
   const summary = { total_users: users.length, total_servers: servers.length, by_status: { ok: 0, skipped: 0, error: 0 } };
 
@@ -184,7 +181,15 @@ deployRoutes.post('/all', requireAuth, async (req, res) => {
       mat.cleanup();
     }
   }
+  return summary;
+}
 
-  logAudit(req, 'deploy.all', { details: summary });
-  res.json(summary);
+// POST /api/deploy/all   body: { server_ids?: [int] }
+// Deployt ALLE aktivierten User auf gewaehlte Server.
+deployRoutes.post('/all', requireAuth, async (req, res) => {
+  const result = await runDeployAll({ serverIds: req.body?.server_ids });
+  if (result.error) return res.status(400).json({ error: result.error });
+  logAudit(req, 'deploy.all', { details: result });
+  res.json(result);
 });
+

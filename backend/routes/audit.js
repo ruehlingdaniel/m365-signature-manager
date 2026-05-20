@@ -46,3 +46,43 @@ auditRoutes.get('/deploys', requireAuth, (req, res) => {
 });
 
 function safeJsonParse(s) { try { return JSON.parse(s); } catch { return s; } }
+
+// GET /api/audit/matrix
+// Liefert pro User × Server den letzten Deploy-Status. Liefert auch Header-Listen.
+auditRoutes.get('/matrix', requireAuth, (req, res) => {
+  const users = db.prepare(`
+    SELECT id, windows_username, display_name, department, enabled
+    FROM signature_users
+    ORDER BY display_name
+  `).all();
+
+  const servers = db.prepare(`
+    SELECT id, name, hostname, enabled
+    FROM terminal_servers
+    ORDER BY name
+  `).all();
+
+  // Letzter Deploy pro (user_id, server_id)
+  const latest = db.prepare(`
+    SELECT d.user_id, d.server_id, d.status, d.message, d.created_at, d.duration_ms
+    FROM deploy_log d
+    INNER JOIN (
+      SELECT user_id, server_id, MAX(id) AS max_id
+      FROM deploy_log
+      GROUP BY user_id, server_id
+    ) m ON m.max_id = d.id
+  `).all();
+
+  const matrix = {};
+  for (const row of latest) {
+    if (!matrix[row.user_id]) matrix[row.user_id] = {};
+    matrix[row.user_id][row.server_id] = {
+      status: row.status,
+      message: row.message,
+      created_at: row.created_at,
+      duration_ms: row.duration_ms,
+    };
+  }
+
+  res.json({ users, servers, matrix });
+});

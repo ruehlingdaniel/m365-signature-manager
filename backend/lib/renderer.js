@@ -1,4 +1,5 @@
 import sanitizeHtml from 'sanitize-html';
+import { getSetting } from './db.js';
 
 const SANITIZE_OPTS = {
   allowedTags: [
@@ -26,18 +27,33 @@ export function sanitize(html) {
   return sanitizeHtml(html || '', SANITIZE_OPTS);
 }
 
+// Keys, deren Werte direkt als HTML eingefuegt werden (kein Escape).
+// Aktuell nur "logo" — bekommt vom Renderer ein <img>-Tag injiziert.
+const RAW_KEYS = new Set(['logo']);
+
 // Replace {{variable}} placeholders with values from context
 export function renderTemplate(html, context) {
   return (html || '').replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, key) => {
     const value = key.split('.').reduce((acc, part) => (acc == null ? acc : acc[part]), context);
     if (value == null || value === '') return '';
+    if (RAW_KEYS.has(key)) return String(value); // raw insert
     return String(value).replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
   });
 }
 
-// Build the context dict from a m365_users row
+// Liefert den HTML-Snippet fuer das zentrale Firmenlogo, basierend auf
+// Setting `company_logo_asset_id` + `company_logo_width`. Liefert "" wenn nicht gesetzt.
+export function getLogoHtml() {
+  const assetId = getSetting('company_logo_asset_id');
+  if (!assetId) return '';
+  const width = parseInt(getSetting('company_logo_width') || '150', 10);
+  const altText = getSetting('company_logo_alt') || 'Logo';
+  return `<img src="/api/assets/${assetId}/file" alt="${altText.replace(/"/g, '&quot;')}" style="max-width:${width}px;height:auto;" />`;
+}
+
+// Build the context dict from a signature_users row
 export function buildContext(user) {
   if (!user) return {};
   let custom = {};
@@ -58,11 +74,13 @@ export function buildContext(user) {
     postalCode: user.postal_code || '',
     country: user.country || '',
     website: user.website || '',
+    logo: getLogoHtml(),
     ...custom,
   };
 }
 
 export const AVAILABLE_VARIABLES = [
+  { key: 'logo', label: 'Firmenlogo (zentral)' },
   { key: 'displayName', label: 'Vollstaendiger Name' },
   { key: 'jobTitle', label: 'Position / Titel' },
   { key: 'department', label: 'Abteilung' },
