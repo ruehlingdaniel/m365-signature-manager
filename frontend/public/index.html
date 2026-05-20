@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>M365 Signature Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/suneditor@2.47.6/dist/css/suneditor.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/suneditor@2.47.6/dist/suneditor.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/suneditor@2.47.6/src/lang/de.js"></script>
+  <link rel="stylesheet" href="/styles.css?v=4">
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen">
+
+<!-- Login Screen -->
+<div id="login-view" class="hidden min-h-screen flex items-center justify-center">
+  <form id="login-form" class="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm space-y-4">
+    <h1 class="text-2xl font-bold text-slate-900">Signature Manager</h1>
+    <p class="text-sm text-slate-500">Bitte anmelden</p>
+    <div>
+      <label class="text-sm text-slate-600">Benutzername</label>
+      <input name="username" autocomplete="username" required class="mt-1 w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+    </div>
+    <div>
+      <label class="text-sm text-slate-600">Passwort</label>
+      <input name="password" type="password" autocomplete="current-password" required class="mt-1 w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+    </div>
+    <div id="login-error" class="text-sm text-red-600 hidden"></div>
+    <button class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg">Anmelden</button>
+  </form>
+</div>
+
+<!-- App Shell -->
+<div id="app-view" class="hidden min-h-screen">
+  <header class="bg-slate-900 text-white">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-8">
+        <div class="font-bold">M365 Signature Manager</div>
+        <nav class="flex gap-1 text-sm">
+          <a href="#/dashboard" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Dashboard</a>
+          <a href="#/users" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Mitarbeiter</a>
+          <a href="#/templates" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Templates</a>
+          <a href="#/assets" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Bilder</a>
+          <a href="#/servers" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Terminalserver</a>
+          <a href="#/footer" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Pflichtfooter</a>
+          <a href="#/audit" class="nav-link px-3 py-1.5 rounded hover:bg-slate-700">Audit</a>
+        </nav>
+      </div>
+      <div class="flex items-center gap-3 text-sm">
+        <span id="current-user" class="text-slate-300"></span>
+        <button id="logout-btn" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded">Abmelden</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="content" class="max-w-7xl mx-auto px-6 py-6"></main>
+</div>
+
+<!-- Toast Container -->
+<div id="toasts" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+<!-- Modal Container -->
+<div id="modal-root"></div>
+
+<script src="/app.js?v=4" type="module"></script>
+</body>
+</html>

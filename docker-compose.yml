@@ -1,0 +1,27 @@
+services:
+  signature-manager:
+    build: .
+    container_name: m365-signature-manager
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-4000}:4000"
+    environment:
+      # 32-byte Hex-Key fuer Verschluesselung der SMB-Passwoerter in DB.
+      # Generieren: openssl rand -hex 32
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      INITIAL_ADMIN_USER: ${INITIAL_ADMIN_USER:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-changeme}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      NODE_ENV: production
+    volumes:
+      - ./data:/app/backend/data
+      # Dev-Bind-Mounts (auskommentieren in Produktion):
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - backend_node_modules:/app/backend/node_modules
+    # Damit der Container die Windows-Hostnamen aufloesen kann, optional DNS-Server setzen:
+    # dns:
+    #   - 192.168.1.x
+
+volumes:
+  backend_node_modules:

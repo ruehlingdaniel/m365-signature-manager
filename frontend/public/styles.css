@@ -1,0 +1,36 @@
+/* Minimal-Erweiterungen zu Tailwind */
+.nav-link.active { background-color: rgb(51 65 85); color: white; font-weight: 600; }
+
+/* Live-Preview Container */
+.sig-preview {
+  background: white;
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.5rem;
+  padding: 16px;
+  min-height: 80px;
+  font-family: Calibri, Arial, sans-serif;
+  font-size: 11pt;
+  color: #0f172a;
+}
+.sig-preview img { max-width: 100%; height: auto; }
+
+/* HTML-Code-Textarea monospace */
+textarea.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+/* SunEditor — Anpassungen + Breite erzwingen */
+.sun-editor {
+  border-radius: 0.5rem !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
+}
+.sun-editor .se-toolbar { background: #f8fafc !important; }
+.sun-editor .se-wrapper-inner { background: white !important; }
+.sun-editor .se-container { width: 100% !important; }
+
+/* Toast Animations */
+.toast { animation: slideIn 0.2s ease-out; }
+@keyframes slideIn {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
