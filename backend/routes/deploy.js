@@ -6,7 +6,7 @@ import { db } from '../lib/db.js';
 import { requireAuth } from '../lib/auth.js';
 import { logAudit } from '../lib/audit.js';
 import { renderTemplate, buildContext, sanitize } from '../lib/renderer.js';
-import { generateSignatureFiles } from '../lib/sig-files.js';
+import { generateSignatureFiles, buildSetDefaultSignatureScript } from '../lib/sig-files.js';
 import { deploySignature, wipeSignatureFolder, SmbError } from '../lib/smb-deploy.js';
 import { getServerForDeploy, getAllEnabledServers } from './servers.js';
 import { getAssetById, readAssetFile } from './assets.js';
@@ -89,10 +89,18 @@ function materializeUserSignature(user) {
     imageFiles.push({ remoteName: img.remoteName, localPath: imgPath });
   }
 
+  // Startup-Script, das beim naechsten User-Login auf dem TS unsere Signatur als
+  // Outlook-Standard setzt und das Cloud-Roaming abschaltet.
+  const startupScriptName = 'Set-Outlook-Default-Signature.cmd';
+  const startupPath = join(dir, startupScriptName);
+  writeFileSync(startupPath, buildSetDefaultSignatureScript(signatureName), { encoding: 'binary' });
+  const startupScript = { remoteName: startupScriptName, localPath: startupPath };
+
   return {
     signatureName,
     files,
     imageFiles,
+    startupScript,
     template,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
@@ -122,7 +130,7 @@ deployRoutes.post('/user/:id', requireAuth, async (req, res) => {
         if (user.replace_existing_signatures) {
           await wipeSignatureFolder(server, user.windows_username);
         }
-        outcome = await deploySignature(server, user.windows_username, mat.signatureName, mat.files, mat.imageFiles);
+        outcome = await deploySignature(server, user.windows_username, mat.signatureName, mat.files, mat.imageFiles, mat.startupScript);
         if (user.replace_existing_signatures && outcome.status === 'ok') {
           outcome.message = `[ersetzt] ${outcome.message}`;
         }
@@ -179,7 +187,7 @@ export async function runDeployAll({ serverIds } = {}) {
           if (user.replace_existing_signatures) {
             await wipeSignatureFolder(server, user.windows_username);
           }
-          outcome = await deploySignature(server, user.windows_username, mat.signatureName, mat.files, mat.imageFiles);
+          outcome = await deploySignature(server, user.windows_username, mat.signatureName, mat.files, mat.imageFiles, mat.startupScript);
           if (user.replace_existing_signatures && outcome.status === 'ok') {
             outcome.message = `[ersetzt] ${outcome.message}`;
           }

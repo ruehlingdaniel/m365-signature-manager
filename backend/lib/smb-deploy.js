@@ -117,12 +117,16 @@ export async function wipeSignatureFolder(server, windowsUsername) {
 // Deployt eine Signatur-Bundle (mehrere Dateien + ggf. _files/-Ordner) in ein User-Profil.
 // files = [{ remoteName: 'Firma_Standard.htm', localPath: '/tmp/x.htm' }, ...]
 // imageFiles = [{ remoteName: 'image001.png', localPath: '/tmp/logo.png' }] -> landen in <name>_files\
-export async function deploySignature(server, windowsUsername, signatureName, files, imageFiles = []) {
+// startupScript = { remoteName: 'Set-Outlook-Default-Signature.cmd', localPath: '/tmp/x.cmd' }
+//   landet in \AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\
+//   und setzt beim naechsten User-Login die Outlook-Standard-Signatur per reg add.
+export async function deploySignature(server, windowsUsername, signatureName, files, imageFiles = [], startupScript = null) {
   const start = Date.now();
   const profilePath = server.profile_path || 'Users';
   const userBase = `${profilePath}\\${windowsUsername}`;
   const sigDir = `${userBase}\\AppData\\Roaming\\Microsoft\\Signatures`;
   const imgDir = `${sigDir}\\${signatureName}_files`;
+  const startupDir = `${userBase}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup`;
 
   // Pre-Check: Existiert das User-Profil?
   const hasProfile = await profileExists(server, windowsUsername, profilePath);
@@ -144,6 +148,12 @@ export async function deploySignature(server, windowsUsername, signatureName, fi
     `mkdir "${sigDir}"`,
   ];
   if (imageFiles.length) mkdirCmds.push(`mkdir "${imgDir}"`);
+  if (startupScript) {
+    mkdirCmds.push(`mkdir "${userBase}\\AppData\\Roaming\\Microsoft\\Windows"`);
+    mkdirCmds.push(`mkdir "${userBase}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu"`);
+    mkdirCmds.push(`mkdir "${userBase}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs"`);
+    mkdirCmds.push(`mkdir "${startupDir}"`);
+  }
   // smbclient: mkdir auf existierendes Verzeichnis loggt nur eine Warnung; -c fuehrt alle Cmds aus
   try {
     await runSmbclient(server, mkdirCmds.join('; '));
@@ -167,11 +177,15 @@ export async function deploySignature(server, windowsUsername, signatureName, fi
     putCmds.push(`put "${img.localPath}" "${imgDir}\\${img.remoteName}"`);
     bytesWritten += statSync(img.localPath).size;
   }
+  if (startupScript) {
+    putCmds.push(`put "${startupScript.localPath}" "${startupDir}\\${startupScript.remoteName}"`);
+    bytesWritten += statSync(startupScript.localPath).size;
+  }
   if (putCmds.length === 0) {
     return { status: 'skipped', message: 'Keine Dateien zu deployen', files_written: 0, bytes_written: 0, duration_ms: Date.now() - start };
   }
   await runSmbclient(server, putCmds.join('; '));
-  filesWritten = files.length + imageFiles.length;
+  filesWritten = files.length + imageFiles.length + (startupScript ? 1 : 0);
 
   return {
     status: 'ok',
