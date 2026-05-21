@@ -93,7 +93,7 @@ function materializeUserSignature(user) {
   // Outlook-Standard setzt und das Cloud-Roaming abschaltet.
   const startupScriptName = 'Set-Outlook-Default-Signature.cmd';
   const startupPath = join(dir, startupScriptName);
-  writeFileSync(startupPath, buildSetDefaultSignatureScript(signatureName), { encoding: 'binary' });
+  writeFileSync(startupPath, buildSetDefaultSignatureScript(signatureName), 'utf8');
   const startupScript = { remoteName: startupScriptName, localPath: startupPath };
 
   return {
