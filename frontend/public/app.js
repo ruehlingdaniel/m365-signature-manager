@@ -402,6 +402,7 @@ registerRoute('#/users', async (content) => {
               <th class="text-left px-5 py-2">Abteilung</th>
               <th class="text-left px-5 py-2">Template</th>
               <th class="text-left px-5 py-2">Letzter Deploy</th>
+              <th class="text-left px-5 py-2">Ersetzt alle</th>
               <th class="text-left px-5 py-2">Aktiv</th>
               <th></th>
             </tr>
@@ -490,7 +491,7 @@ async function openCsvImportModal() {
 }
 
 function renderUsersTable(users) {
-  if (!users.length) return '<tr><td colspan="7" class="px-5 py-6 text-slate-400 text-center">Keine Mitarbeiter angelegt</td></tr>';
+  if (!users.length) return '<tr><td colspan="8" class="px-5 py-6 text-slate-400 text-center">Keine Mitarbeiter angelegt</td></tr>';
   return users.map(u => `
     <tr class="border-t hover:bg-slate-50">
       <td class="px-5 py-2 font-medium">${esc(u.display_name)}</td>
@@ -500,6 +501,7 @@ function renderUsersTable(users) {
       <td class="px-5 py-2 text-slate-500">
         ${u.last_deploy_at ? `${esc(u.last_deploy_at)} ${statusBadge(u.last_deploy_status)}` : '<span class="text-slate-400">nie</span>'}
       </td>
+      <td class="px-5 py-2">${u.replace_existing_signatures ? '<span title="Loescht beim Deploy alle anderen Signaturen" class="text-amber-600">⟳ Ja</span>' : '<span class="text-slate-300">—</span>'}</td>
       <td class="px-5 py-2">${u.enabled ? '<span class="text-emerald-600">●</span>' : '<span class="text-slate-300">○</span>'}</td>
       <td class="px-5 py-2 text-right whitespace-nowrap">
         <button data-edit="${u.id}" class="text-blue-600 hover:underline mr-3">Bearbeiten</button>
@@ -535,7 +537,8 @@ async function openUserModal(id) {
     windows_username: '', display_name: '', email: '', job_title: '', department: '',
     company: '', office_location: '', phone: '', mobile: '', fax: '',
     street: '', city: '', postal_code: '', country: '', website: '',
-    signature_name: 'Firma_Standard', template_id: '', enabled: 1, custom_fields: {},
+    signature_name: 'Firma_Standard', template_id: '', enabled: 1,
+    replace_existing_signatures: 0, custom_fields: {},
   };
 
   const body = el(`
@@ -626,10 +629,19 @@ async function openUserModal(id) {
         <textarea data-f="custom_fields" rows="3" class="code w-full px-3 py-2 border rounded-lg">${esc(JSON.stringify(user.custom_fields || {}, null, 2))}</textarea>
       </div>
 
-      <label class="flex items-center gap-2">
-        <input type="checkbox" data-f="enabled" ${user.enabled ? 'checked' : ''}/>
-        <span class="text-sm">Aktiv (deployt diesen User)</span>
-      </label>
+      <div class="space-y-2">
+        <label class="flex items-center gap-2">
+          <input type="checkbox" data-f="enabled" ${user.enabled ? 'checked' : ''}/>
+          <span class="text-sm">Aktiv (deployt diesen User)</span>
+        </label>
+        <label class="flex items-start gap-2">
+          <input type="checkbox" data-f="replace_existing_signatures" class="mt-1" ${user.replace_existing_signatures ? 'checked' : ''}/>
+          <span class="text-sm">
+            <span class="font-medium text-amber-700">Bestehende Signaturen ersetzen</span>
+            <span class="block text-xs text-slate-500">Beim Deploy wird der komplette Outlook-Signatures-Ordner dieses Users auf den Terminalservern geleert, bevor die neue Signatur geschrieben wird. Alle anderen Signaturen des Users gehen verloren.</span>
+          </span>
+        </label>
+      </div>
 
       <div class="border-t pt-4">
         <h3 class="font-semibold mb-2">Live-Preview</h3>

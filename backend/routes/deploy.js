@@ -7,7 +7,7 @@ import { requireAuth } from '../lib/auth.js';
 import { logAudit } from '../lib/audit.js';
 import { renderTemplate, buildContext, sanitize } from '../lib/renderer.js';
 import { generateSignatureFiles } from '../lib/sig-files.js';
-import { deploySignature, SmbError } from '../lib/smb-deploy.js';
+import { deploySignature, wipeSignatureFolder, SmbError } from '../lib/smb-deploy.js';
 import { getServerForDeploy, getAllEnabledServers } from './servers.js';
 import { getAssetById, readAssetFile } from './assets.js';
 
@@ -119,7 +119,13 @@ deployRoutes.post('/user/:id', requireAuth, async (req, res) => {
     await Promise.all(servers.map(async server => {
       let outcome;
       try {
+        if (user.replace_existing_signatures) {
+          await wipeSignatureFolder(server, user.windows_username);
+        }
         outcome = await deploySignature(server, user.windows_username, mat.signatureName, mat.files, mat.imageFiles);
+        if (user.replace_existing_signatures && outcome.status === 'ok') {
+          outcome.message = `[ersetzt] ${outcome.message}`;
+        }
       } catch (err) {
         outcome = {
           status: 'error',
@@ -170,7 +176,13 @@ export async function runDeployAll({ serverIds } = {}) {
       await Promise.all(servers.map(async server => {
         let outcome;
         try {
+          if (user.replace_existing_signatures) {
+            await wipeSignatureFolder(server, user.windows_username);
+          }
           outcome = await deploySignature(server, user.windows_username, mat.signatureName, mat.files, mat.imageFiles);
+          if (user.replace_existing_signatures && outcome.status === 'ok') {
+            outcome.message = `[ersetzt] ${outcome.message}`;
+          }
         } catch (err) {
           outcome = { status: 'error', message: err.message, files_written: 0, bytes_written: 0, duration_ms: 0 };
         }

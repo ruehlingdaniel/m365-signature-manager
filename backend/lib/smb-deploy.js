@@ -87,6 +87,33 @@ export async function profileExists(server, windowsUsername, profilePath = 'User
   }
 }
 
+// Leert den gesamten Outlook-Signatures-Ordner eines Users (rekursiv).
+// Wird vor dem Deploy aufgerufen, wenn der User das Flag replace_existing_signatures = 1 hat.
+// Idempotent: existiert der Ordner nicht, ist das kein Fehler.
+export async function wipeSignatureFolder(server, windowsUsername) {
+  const profilePath = server.profile_path || 'Users';
+  const userBase = `${profilePath}\\${windowsUsername}`;
+  const sigDir = `${userBase}\\AppData\\Roaming\\Microsoft\\Signatures`;
+
+  // User-Profil pruefen — wenn nicht vorhanden, gibt es auch keinen Signatures-Ordner.
+  const hasProfile = await profileExists(server, windowsUsername, profilePath);
+  if (!hasProfile) {
+    return { wiped: false, message: `User-Profil "${windowsUsername}" existiert nicht — nichts zu loeschen` };
+  }
+
+  // smbclient deltree loescht rekursiv. Existiert der Ordner nicht, ist das ok.
+  try {
+    await runSmbclient(server, `deltree "${sigDir}"`);
+    return { wiped: true, message: `Signatures-Ordner geleert: ${sigDir}` };
+  } catch (err) {
+    const combined = err.message + (err.stderr || '') + (err.stdout || '');
+    if (/NT_STATUS_OBJECT_(NAME|PATH)_NOT_FOUND|NT_STATUS_NO_SUCH_FILE/.test(combined)) {
+      return { wiped: false, message: 'Signatures-Ordner existierte nicht' };
+    }
+    throw err;
+  }
+}
+
 // Deployt eine Signatur-Bundle (mehrere Dateien + ggf. _files/-Ordner) in ein User-Profil.
 // files = [{ remoteName: 'Firma_Standard.htm', localPath: '/tmp/x.htm' }, ...]
 // imageFiles = [{ remoteName: 'image001.png', localPath: '/tmp/logo.png' }] -> landen in <name>_files\

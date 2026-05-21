@@ -10,7 +10,7 @@ const USER_FIELDS = [
   'windows_username', 'display_name', 'email', 'job_title', 'department',
   'company', 'office_location', 'phone', 'mobile', 'fax',
   'street', 'city', 'postal_code', 'country', 'website',
-  'template_id', 'signature_name', 'enabled',
+  'template_id', 'signature_name', 'enabled', 'replace_existing_signatures',
 ];
 
 function normalizeUserInput(body) {
@@ -24,6 +24,7 @@ function normalizeUserInput(body) {
       : JSON.stringify(body.custom_fields || {});
   }
   if ('enabled' in u) u.enabled = u.enabled ? 1 : 0;
+  if ('replace_existing_signatures' in u) u.replace_existing_signatures = u.replace_existing_signatures ? 1 : 0;
   if (u.template_id === '' || u.template_id === null) u.template_id = null;
   if (!u.signature_name) {
     u.signature_name = getSetting('default_signature_name') || 'Firma_Standard';
@@ -35,7 +36,7 @@ userRoutes.get('/', requireAuth, (req, res) => {
   const q = (req.query.q || '').toString().toLowerCase();
   const rows = db.prepare(`
     SELECT u.id, u.windows_username, u.display_name, u.email, u.job_title, u.department,
-           u.enabled, u.template_id, u.signature_name, u.updated_at,
+           u.enabled, u.template_id, u.signature_name, u.replace_existing_signatures, u.updated_at,
            t.name AS template_name,
            (SELECT MAX(created_at) FROM deploy_log dl WHERE dl.user_id = u.id) AS last_deploy_at,
            (SELECT status FROM deploy_log dl WHERE dl.user_id = u.id ORDER BY dl.created_at DESC LIMIT 1) AS last_deploy_status
