@@ -3,6 +3,7 @@
 import { getSetting } from './db.js';
 import { logAudit } from './audit.js';
 import { runDeployAll } from '../routes/deploy.js';
+import { runLogCleanup, shouldRunCleanup } from './log-cleanup.js';
 
 let timer = null;
 let lastFiredKey = ''; // YYYY-MM-DD_HH:MM — verhindert mehrfache Triggers innerhalb derselben Minute
@@ -14,6 +15,12 @@ function fmt(d) {
 
 async function tick() {
   try {
+    // Log-Retention: einmal pro Tag (24h Cooldown ueber log_cleanup_last_run Setting).
+    if (shouldRunCleanup()) {
+      try { runLogCleanup(); }
+      catch (err) { console.warn('[scheduler] log-cleanup failed:', err.message); }
+    }
+
     const enabled = getSetting('auto_deploy_enabled');
     if (enabled !== '1' && enabled !== 'true') return;
     const time = getSetting('auto_deploy_time') || '03:00';

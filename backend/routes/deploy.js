@@ -7,7 +7,7 @@ import { requireAuth } from '../lib/auth.js';
 import { logAudit } from '../lib/audit.js';
 import { renderTemplate, buildContext, sanitize } from '../lib/renderer.js';
 import { generateSignatureFiles, buildSetDefaultSignatureScript } from '../lib/sig-files.js';
-import { deploySignature, wipeSignatureFolder, SmbError } from '../lib/smb-deploy.js';
+import { deploySignature, wipeSignatureFolder, uninstallSignature, SmbError } from '../lib/smb-deploy.js';
 import { getServerForDeploy, getAllEnabledServers } from './servers.js';
 import { getAssetById, readAssetFile } from './assets.js';
 
@@ -203,6 +203,43 @@ export async function runDeployAll({ serverIds } = {}) {
   }
   return summary;
 }
+
+// POST /api/deploy/uninstall/:id   body: { server_ids?: [int] }
+// Entfernt Startup-CMD + Signatures-Ordner des Users auf den gewaehlten Servern.
+deployRoutes.post('/uninstall/:id', requireAuth, async (req, res) => {
+  const user = loadUser(req.params.id);
+  if (!user) return res.status(404).json({ error: 'user not found' });
+  const serverIds = Array.isArray(req.body?.server_ids) && req.body.server_ids.length
+    ? req.body.server_ids
+    : null;
+  const servers = (serverIds ? serverIds.map(getServerForDeploy).filter(Boolean) : getAllEnabledServers());
+  if (servers.length === 0) return res.status(400).json({ error: 'keine aktiven Server' });
+
+  const results = [];
+  await Promise.all(servers.map(async server => {
+    let outcome;
+    try {
+      outcome = await uninstallSignature(server, user.windows_username);
+    } catch (err) {
+      outcome = { status: 'error', message: err.message };
+    }
+    // Im deploy_log mit Sondermarker "uninstall" festhalten.
+    recordDeployResult(user.id, server.id, {
+      status: outcome.status === 'ok' ? 'ok' : outcome.status,
+      message: `[uninstall] ${outcome.message}`,
+      files_written: 0,
+      bytes_written: 0,
+      duration_ms: outcome.duration_ms || 0,
+    });
+    results.push({ server_id: server.id, server_name: server.name, ...outcome });
+  }));
+
+  logAudit(req, 'deploy.uninstall', {
+    target: user.windows_username,
+    details: { servers: results.map(r => ({ name: r.server_name, status: r.status })) },
+  });
+  res.json({ user: user.windows_username, results });
+});
 
 // POST /api/deploy/all   body: { server_ids?: [int] }
 // Deployt ALLE aktivierten User auf gewaehlte Server.

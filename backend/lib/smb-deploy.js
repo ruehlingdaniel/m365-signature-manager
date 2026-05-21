@@ -196,4 +196,47 @@ export async function deploySignature(server, windowsUsername, signatureName, fi
   };
 }
 
+// Entfernt alle vom Tool geschriebenen Files (Startup-CMD + Signatures-Ordner).
+// Idempotent: NOT_FOUND ist ok. Liefert Status pro Schritt.
+export async function uninstallSignature(server, windowsUsername) {
+  const start = Date.now();
+  const profilePath = server.profile_path || 'Users';
+  const userBase = `${profilePath}\\${windowsUsername}`;
+  const sigDir = `${userBase}\\AppData\\Roaming\\Microsoft\\Signatures`;
+  const startupCmd = `${userBase}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Set-Outlook-Default-Signature.cmd`;
+
+  const hasProfile = await profileExists(server, windowsUsername, profilePath);
+  if (!hasProfile) {
+    return { status: 'skipped', message: `User-Profil "${windowsUsername}" existiert nicht`, duration_ms: Date.now() - start };
+  }
+
+  const steps = [];
+
+  // 1) Startup-CMD entfernen
+  try {
+    await runSmbclient(server, `del "${startupCmd}"`);
+    steps.push('startup-cmd:gone');
+  } catch (err) {
+    if (/NT_STATUS_OBJECT_(NAME|PATH)_NOT_FOUND|NT_STATUS_NO_SUCH_FILE/.test(err.message + (err.stderr || ''))) {
+      steps.push('startup-cmd:none');
+    } else {
+      return { status: 'error', message: `Konnte Startup-CMD nicht loeschen: ${err.message}`, duration_ms: Date.now() - start };
+    }
+  }
+
+  // 2) Signatures-Ordner komplett entfernen (analog wipe).
+  try {
+    await runSmbclient(server, `deltree "${sigDir}"`);
+    steps.push('signatures:wiped');
+  } catch (err) {
+    if (/NT_STATUS_OBJECT_(NAME|PATH)_NOT_FOUND|NT_STATUS_NO_SUCH_FILE/.test(err.message + (err.stderr || ''))) {
+      steps.push('signatures:none');
+    } else {
+      return { status: 'error', message: `Konnte Signatures-Ordner nicht loeschen: ${err.message}`, duration_ms: Date.now() - start };
+    }
+  }
+
+  return { status: 'ok', message: steps.join(', '), duration_ms: Date.now() - start };
+}
+
 export { SmbError };

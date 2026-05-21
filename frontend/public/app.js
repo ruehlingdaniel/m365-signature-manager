@@ -283,16 +283,33 @@ window.addEventListener('hashchange', route);
 
 // ---------- View: Dashboard ----------
 registerRoute('#/dashboard', async (content) => {
-  const [users, servers, deploys] = await Promise.all([
+  const [users, servers, deploys, settings] = await Promise.all([
     api.get('/api/users'),
     api.get('/api/servers'),
     api.get('/api/audit/deploys?limit=10'),
+    api.get('/api/settings'),
   ]);
   const okCount = deploys.filter(d => d.status === 'ok').length;
   const errCount = deploys.filter(d => d.status === 'error').length;
+  const bannerDismissed = settings.roaming_banner_dismissed === '1' || settings.roaming_banner_dismissed === 'true';
   content.innerHTML = '';
   content.appendChild(el(`
     <div class="space-y-6">
+      ${bannerDismissed ? '' : `
+      <div id="roaming-banner" class="bg-amber-50 border border-amber-300 text-amber-900 rounded-xl p-4 flex items-start justify-between gap-4">
+        <div class="text-sm">
+          <strong>Empfohlen vor erstem Rollout:</strong> Outlook Cloud-Roaming-Signatures tenant-weit deaktivieren via PowerShell.
+          Solange Roaming aktiv ist, kann es bei der ersten Anmeldung nach einem Deploy zu einer Race-Condition kommen, in der Outlook
+          die alte Cloud-Signatur zurueckholt, bevor unsere Registry-Settings greifen.
+          <div class="mt-2 text-xs">
+            Skript:
+            <a href="https://github.com/ruehlingdaniel/m365-signature-manager/blob/main/scripts/disable-roaming-signatures.ps1" target="_blank" class="font-mono underline">scripts/disable-roaming-signatures.ps1</a>
+            (Global Admin / Exchange Admin noetig). Setzt <code class="bg-white px-1 rounded">Set-OrganizationConfig -PostponeRoamingSignaturesUntilLater $true</code>.
+          </div>
+        </div>
+        <button id="roaming-banner-dismiss" class="text-amber-900 hover:text-amber-700 text-xs whitespace-nowrap underline">Banner ausblenden</button>
+      </div>`}
+
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div class="bg-white p-5 rounded-xl shadow-sm">
           <div class="text-xs uppercase text-slate-500">Mitarbeiter</div>
@@ -365,6 +382,14 @@ registerRoute('#/dashboard', async (content) => {
       route();
     } catch (err) { toast(err.message, 'error'); }
   };
+
+  const dismissBtn = document.getElementById('roaming-banner-dismiss');
+  if (dismissBtn) dismissBtn.onclick = async () => {
+    try {
+      await api.put('/api/settings', { roaming_banner_dismissed: '1' });
+      document.getElementById('roaming-banner').remove();
+    } catch (err) { toast(err.message, 'error'); }
+  };
 });
 
 function statusBadge(status) {
@@ -388,6 +413,7 @@ registerRoute('#/users', async (content) => {
         <h1 class="text-2xl font-bold">Mitarbeiter (${users.length})</h1>
         <div class="flex gap-2">
           <input id="user-search" placeholder="Suche..." class="px-3 py-2 border rounded-lg text-sm"/>
+          <button id="bulk-replace" class="px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-lg font-semibold" title="Bei allen aktiven Mitarbeitern das Flag 'Bestehende Signaturen ersetzen' setzen/zuruecksetzen">⟳ Bulk-Replace</button>
           <button id="csv-import" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg font-semibold">CSV-Import</button>
           <button id="new-user" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">+ Mitarbeiter</button>
         </div>
@@ -424,8 +450,35 @@ registerRoute('#/users', async (content) => {
 
   document.getElementById('new-user').onclick = () => openUserModal(null);
   document.getElementById('csv-import').onclick = () => openCsvImportModal();
+  document.getElementById('bulk-replace').onclick = () => openBulkReplaceModal();
   bindUsersRowEvents();
 });
+
+function openBulkReplaceModal() {
+  const body = el(`
+    <div class="space-y-4">
+      <p class="text-sm text-slate-600">Setzt das Flag <strong>"Bestehende Signaturen ersetzen"</strong> bei allen <strong>aktiven</strong> Mitarbeitern.</p>
+      <div class="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3 text-sm">
+        <strong>Achtung:</strong> Mit aktiviertem Flag werden bei jedem Deploy alle anderen Signaturen im Outlook-Signatures-Ordner der Mitarbeiter auf den Terminalservern geloescht. Nur diese Tool-Signatur bleibt uebrig.
+      </div>
+      <div class="flex gap-2 justify-end pt-2 border-t">
+        <button data-action="off" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg">Auf "Nein" setzen</button>
+        <button data-action="on" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-semibold">Auf "Ja" setzen</button>
+      </div>
+    </div>
+  `);
+  const modal = openModal('Bulk-Replace fuer alle aktiven Mitarbeiter', body);
+  async function run(value) {
+    try {
+      const r = await api.post('/api/users/bulk-replace', { value });
+      toast(`${r.count} Mitarbeiter aktualisiert (replace = ${r.value})`, 'success');
+      modal.close();
+      route();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  body.querySelector('[data-action=off]').onclick = () => run(false);
+  body.querySelector('[data-action=on]').onclick = () => run(true);
+}
 
 async function openCsvImportModal() {
   const body = el(`
@@ -648,10 +701,15 @@ async function openUserModal(id) {
         <div id="user-preview" class="sig-preview">Bitte erst speichern fuer Preview</div>
       </div>
 
-      <div class="flex justify-end gap-2 pt-2 border-t">
-        <button data-action="preview" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg">Preview</button>
-        <button data-action="save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Speichern</button>
-        ${id ? '<button data-action="save-deploy" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold">Speichern + Deploy</button>' : ''}
+      <div class="flex justify-between gap-2 pt-2 border-t">
+        <div>
+          ${id ? '<button data-action="uninstall" class="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg" title="Tool-Spuren (Startup-CMD + Signatures-Ordner) auf allen TS entfernen">Tool-Spuren entfernen</button>' : ''}
+        </div>
+        <div class="flex gap-2">
+          <button data-action="preview" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg">Preview</button>
+          <button data-action="save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold">Speichern</button>
+          ${id ? '<button data-action="save-deploy" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold">Speichern + Deploy</button>' : ''}
+        </div>
       </div>
     </div>
   `);
@@ -705,6 +763,17 @@ async function openUserModal(id) {
   if (sd) sd.onclick = async () => {
     const sid = await save();
     if (sid) { await deploySingleUser(sid); modal.close(); route(); }
+  };
+  const ub = body.querySelector('[data-action=uninstall]');
+  if (ub) ub.onclick = async () => {
+    if (!await confirm(`Wirklich Startup-CMD und Signatures-Ordner von "${user.windows_username}" auf ALLEN aktiven TS entfernen?`)) return;
+    try {
+      const r = await api.post('/api/deploy/uninstall/' + id, {});
+      const summary = r.results.map(x => `${x.server_name}: ${x.status}`).join(', ');
+      toast(summary, r.results.every(x => x.status === 'ok' || x.status === 'skipped') ? 'success' : 'warn');
+      modal.close();
+      route();
+    } catch (err) { toast(err.message, 'error'); }
   };
 
   if (id) preview();
@@ -1286,6 +1355,8 @@ registerRoute('#/settings', async (content) => {
   const logoWidth = settings.company_logo_width || '150';
   const autoEnabled = settings.auto_deploy_enabled === '1' || settings.auto_deploy_enabled === 'true';
   const autoTime = settings.auto_deploy_time || '03:00';
+  const retentionDays = settings.log_retention_days || '90';
+  const lastCleanup = settings.log_cleanup_last_run || '—';
 
   content.innerHTML = '';
   content.appendChild(el(`
@@ -1332,6 +1403,24 @@ registerRoute('#/settings', async (content) => {
             <span class="text-xs text-slate-500">Server-Lokalzeit</span>
           </div>
           <button id="auto-save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-sm">Speichern</button>
+        </div>
+      </div>
+
+      <!-- Log-Retention -->
+      <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b"><h2 class="font-semibold">Log-Retention</h2></div>
+        <div class="p-5 space-y-3">
+          <p class="text-sm text-slate-500">Loescht Eintraege in <code class="bg-slate-100 px-1 rounded">audit_log</code> und <code class="bg-slate-100 px-1 rounded">deploy_log</code>, die aelter als X Tage sind. Laeuft 1x taeglich automatisch im Scheduler.</p>
+          <div class="flex items-center gap-2">
+            <label class="text-sm text-slate-600">Aufbewahrungsdauer:</label>
+            <input type="number" id="retention-days" min="7" max="3650" value="${esc(retentionDays)}" class="px-2 py-1 border rounded w-20 text-sm"/>
+            <span class="text-xs text-slate-500">Tage</span>
+          </div>
+          <div class="text-xs text-slate-500">Letzter Cleanup-Lauf: ${esc(lastCleanup)}</div>
+          <div class="flex gap-2">
+            <button id="retention-save" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-sm">Speichern</button>
+            <button id="retention-run-now" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-sm">Cleanup jetzt ausfuehren</button>
+          </div>
         </div>
       </div>
 
@@ -1423,6 +1512,22 @@ registerRoute('#/settings', async (content) => {
     try {
       await api.put('/api/settings', { auto_deploy_enabled: enabled, auto_deploy_time: time });
       toast('Auto-Deploy gespeichert', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  // Retention-Handler
+  document.getElementById('retention-save').onclick = async () => {
+    const days = document.getElementById('retention-days').value || '90';
+    try {
+      await api.put('/api/settings', { log_retention_days: String(days) });
+      toast('Retention gespeichert', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  document.getElementById('retention-run-now').onclick = async () => {
+    try {
+      const r = await api.post('/api/settings/log-cleanup', {});
+      toast(`Geloescht: audit=${r.audit_deleted} deploy=${r.deploy_deleted}`, 'success');
+      route();
     } catch (err) { toast(err.message, 'error'); }
   };
 

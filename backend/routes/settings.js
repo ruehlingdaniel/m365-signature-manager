@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db, getSetting, setSetting } from '../lib/db.js';
 import { requireAuth } from '../lib/auth.js';
 import { logAudit } from '../lib/audit.js';
+import { runLogCleanup } from '../lib/log-cleanup.js';
 
 export const settingsRoutes = Router();
 
@@ -14,6 +15,8 @@ const ALLOWED_KEYS = new Set([
   'disable_roaming_signatures',
   'auto_deploy_enabled',
   'auto_deploy_time',  // "HH:MM"
+  'log_retention_days',
+  'roaming_banner_dismissed', // UI: banner ausgeblendet
 ]);
 
 settingsRoutes.get('/', requireAuth, (req, res) => {
@@ -36,6 +39,13 @@ settingsRoutes.put('/', requireAuth, (req, res) => {
   }
   logAudit(req, 'settings.update', { details: applied });
   res.json({ ok: true, applied });
+});
+
+// Loescht audit_log + deploy_log Eintraege aelter als log_retention_days. Manuelles Trigger.
+settingsRoutes.post('/log-cleanup', requireAuth, (req, res) => {
+  const result = runLogCleanup();
+  logAudit(req, 'settings.log_cleanup', { details: result });
+  res.json(result);
 });
 
 // Convenience: Logo direkt setzen/leeren

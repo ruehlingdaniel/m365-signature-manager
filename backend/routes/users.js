@@ -109,6 +109,28 @@ userRoutes.post('/bulk-assign', requireAuth, (req, res) => {
   res.json({ ok: true, count: user_ids.length });
 });
 
+// POST /api/users/bulk-replace  body: { user_ids?: [int] (default: alle aktiven), value: bool }
+// Setzt replace_existing_signatures fuer eine User-Liste (oder alle aktiven, wenn keine IDs).
+userRoutes.post('/bulk-replace', requireAuth, (req, res) => {
+  const { user_ids, value } = req.body || {};
+  if (typeof value !== 'boolean') return res.status(400).json({ error: 'value (boolean) required' });
+  const v = value ? 1 : 0;
+  let count;
+  if (Array.isArray(user_ids) && user_ids.length) {
+    const stmt = db.prepare('UPDATE signature_users SET replace_existing_signatures = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+    const tx = db.transaction(() => {
+      for (const id of user_ids) stmt.run(v, id);
+    });
+    tx();
+    count = user_ids.length;
+  } else {
+    const r = db.prepare('UPDATE signature_users SET replace_existing_signatures = ?, updated_at = CURRENT_TIMESTAMP WHERE enabled = 1').run(v);
+    count = r.changes;
+  }
+  logAudit(req, 'user.bulk_replace', { details: { count, value: v } });
+  res.json({ ok: true, count, value: v });
+});
+
 // Einfacher CSV-Parser fuer "RFC 4180-ish" — Trennzeichen erkannt aus erster Zeile (komma, semikolon, tab).
 function parseCsv(text) {
   const stripped = text.replace(/^﻿/, ''); // BOM weg
