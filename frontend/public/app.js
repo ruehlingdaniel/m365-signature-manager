@@ -520,6 +520,7 @@ async function openCsvImportModal() {
           <code class="bg-white px-1 rounded">windows_username</code> und
           <code class="bg-white px-1 rounded">display_name</code> (oder dt. Aliase wie „Anzeigename").</p>
         <p class="text-slate-600 mt-1">Optionale Spalten: name_suffix (z.B. ppa., Betriebswirt), email, job_title, department, company, office_location, phone, mobile, fax, street, city, postal_code, country, website</p>
+        <p class="text-slate-600 mt-1">Template-Zuweisung: <code class="bg-white px-1 rounded">template_name</code> (Name des Templates, z.B. „Neustadt") oder <code class="bg-white px-1 rounded">template_id</code> (numerische ID). Leerer Wert oder <code class="bg-white px-1 rounded">-</code>/<code class="bg-white px-1 rounded">null</code> = kein Template (faellt auf globalen Default zurueck). Spalte komplett weglassen = bestehende Zuweisung unveraendert.</p>
         <p class="text-slate-600 mt-1">Bei vorhandenem <code class="bg-white px-1 rounded">windows_username</code> wird der Mitarbeiter aktualisiert (Upsert).</p>
       </div>
       <input id="csv-file" type="file" accept=".csv,text/csv" class="block w-full text-sm"/>

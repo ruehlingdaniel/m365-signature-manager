@@ -176,6 +176,8 @@ const COL_ALIASES = {
   postal_code: ['postal_code', 'plz', 'zip', 'postleitzahl'],
   country: ['country', 'land'],
   website: ['website', 'webseite', 'homepage', 'url'],
+  template_id: ['template_id', 'vorlage_id', 'signatur_id'],
+  template_name: ['template_name', 'template', 'vorlage', 'vorlage_name', 'signatur', 'signatur_vorlage'],
 };
 
 function mapHeaders(headers) {
@@ -209,17 +211,57 @@ userRoutes.post('/import-csv', requireAuth, (req, res) => {
   const existsStmt = db.prepare('SELECT id FROM signature_users WHERE windows_username = ?');
   const insertStmt = db.prepare(`INSERT INTO signature_users
     (windows_username, display_name, name_suffix, email, job_title, department, company, office_location,
-     phone, mobile, fax, street, city, postal_code, country, website, enabled, signature_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Firma_Standard')`);
-  const updateStmt = db.prepare(`UPDATE signature_users SET
+     phone, mobile, fax, street, city, postal_code, country, website, template_id, enabled, signature_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Firma_Standard')`);
+  const updateStmtCore = db.prepare(`UPDATE signature_users SET
     display_name = ?, name_suffix = ?, email = ?, job_title = ?, department = ?, company = ?, office_location = ?,
     phone = ?, mobile = ?, fax = ?, street = ?, city = ?, postal_code = ?, country = ?, website = ?,
     updated_at = CURRENT_TIMESTAMP
     WHERE windows_username = ?`);
+  const updateStmtWithTemplate = db.prepare(`UPDATE signature_users SET
+    display_name = ?, name_suffix = ?, email = ?, job_title = ?, department = ?, company = ?, office_location = ?,
+    phone = ?, mobile = ?, fax = ?, street = ?, city = ?, postal_code = ?, country = ?, website = ?,
+    template_id = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE windows_username = ?`);
+
+  // Templates fuer Lookup vorladen (Name -> ID, case-insensitive; und Set existierender IDs).
+  const templateRows = db.prepare('SELECT id, name FROM signature_templates').all();
+  const templatesById = new Set(templateRows.map(t => t.id));
+  const templatesByName = new Map(templateRows.map(t => [String(t.name).trim().toLowerCase(), t.id]));
 
   function rowValue(row, key) {
     const idx = mapping[key];
     return idx === undefined ? '' : (row[idx] || '').trim();
+  }
+
+  // Aufloesen der Template-Zuweisung aus CSV. Rueckgabe:
+  //   { explicit: false }                — Spalte nicht gesetzt -> Wert unveraendert lassen
+  //   { explicit: true, id: null }       — Spalte leer / explizit "null"/"-" -> auf NULL setzen
+  //   { explicit: true, id: <number> }   — gueltige Zuweisung
+  //   { error: "..." }                   — ungueltiger Wert, Zeile skippen
+  function resolveTemplate(row) {
+    const idVal = rowValue(row, 'template_id');
+    const nameVal = rowValue(row, 'template_name');
+    const hasIdCol = mapping.template_id !== undefined;
+    const hasNameCol = mapping.template_name !== undefined;
+    if (!hasIdCol && !hasNameCol) return { explicit: false };
+    // Wenn beide Spalten existieren, hat template_id Vorrang, sofern gesetzt.
+    if (hasIdCol && idVal !== '') {
+      if (/^(null|-|0)$/i.test(idVal)) return { explicit: true, id: null };
+      const n = parseInt(idVal, 10);
+      if (!Number.isFinite(n) || !templatesById.has(n)) {
+        return { error: `template_id "${idVal}" existiert nicht` };
+      }
+      return { explicit: true, id: n };
+    }
+    if (hasNameCol && nameVal !== '') {
+      if (/^(null|-)$/i.test(nameVal)) return { explicit: true, id: null };
+      const id = templatesByName.get(nameVal.toLowerCase());
+      if (id == null) return { error: `template_name "${nameVal}" nicht gefunden` };
+      return { explicit: true, id };
+    }
+    // Spalte vorhanden, aber Wert leer -> explizit auf NULL setzen.
+    return { explicit: true, id: null };
   }
 
   const tx = db.transaction(() => {
@@ -230,6 +272,12 @@ userRoutes.post('/import-csv', requireAuth, (req, res) => {
       if (!username || !displayName) {
         result.skipped++;
         result.errors.push({ line: i + 1, error: 'windows_username oder display_name leer' });
+        continue;
+      }
+      const tpl = resolveTemplate(row);
+      if (tpl.error) {
+        result.skipped++;
+        result.errors.push({ line: i + 1, username, error: tpl.error });
         continue;
       }
       const vals = [
@@ -252,10 +300,14 @@ userRoutes.post('/import-csv', requireAuth, (req, res) => {
       const existing = existsStmt.get(username);
       try {
         if (existing) {
-          if (!dry_run) updateStmt.run(...vals, username);
+          if (!dry_run) {
+            if (tpl.explicit) updateStmtWithTemplate.run(...vals, tpl.id, username);
+            else updateStmtCore.run(...vals, username);
+          }
           result.updated++;
         } else {
-          if (!dry_run) insertStmt.run(username, ...vals);
+          // Bei INSERT immer template_id mitgeben (NULL wenn nicht angegeben).
+          if (!dry_run) insertStmt.run(username, ...vals, tpl.explicit ? tpl.id : null);
           result.created++;
         }
       } catch (err) {
