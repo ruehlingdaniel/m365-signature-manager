@@ -13,6 +13,7 @@ services:
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-changeme}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       NODE_ENV: production
+      TZ: ${TZ:-Europe/Berlin}
     volumes:
       - ./data:/app/backend/data
       # Dev-Bind-Mounts (auskommentieren in Produktion):
