@@ -7,7 +7,7 @@ import { buildContext, renderTemplate, sanitize } from '../lib/renderer.js';
 export const userRoutes = Router();
 
 const USER_FIELDS = [
-  'windows_username', 'display_name', 'email', 'job_title', 'department',
+  'windows_username', 'display_name', 'name_suffix', 'email', 'job_title', 'department',
   'company', 'office_location', 'phone', 'mobile', 'fax',
   'street', 'city', 'postal_code', 'country', 'website',
   'template_id', 'signature_name', 'enabled', 'replace_existing_signatures',
@@ -35,7 +35,7 @@ function normalizeUserInput(body) {
 userRoutes.get('/', requireAuth, (req, res) => {
   const q = (req.query.q || '').toString().toLowerCase();
   const rows = db.prepare(`
-    SELECT u.id, u.windows_username, u.display_name, u.email, u.job_title, u.department,
+    SELECT u.id, u.windows_username, u.display_name, u.name_suffix, u.email, u.job_title, u.department,
            u.enabled, u.template_id, u.signature_name, u.replace_existing_signatures, u.updated_at,
            t.name AS template_name,
            (SELECT MAX(created_at) FROM deploy_log dl WHERE dl.user_id = u.id) AS last_deploy_at,
@@ -162,6 +162,7 @@ function parseCsv(text) {
 const COL_ALIASES = {
   windows_username: ['windows_username', 'username', 'login', 'windowsuser', 'samaccountname', 'user'],
   display_name: ['display_name', 'name', 'anzeigename', 'displayname', 'vollname'],
+  name_suffix: ['name_suffix', 'namenszusatz', 'name_zusatz', 'suffix', 'akademischer_titel', 'zusatz'],
   email: ['email', 'mail', 'e-mail'],
   job_title: ['job_title', 'position', 'titel', 'jobtitle', 'rolle'],
   department: ['department', 'abteilung', 'dept'],
@@ -207,11 +208,11 @@ userRoutes.post('/import-csv', requireAuth, (req, res) => {
   const result = { total: rows.length - 1, created: 0, updated: 0, skipped: 0, errors: [] };
   const existsStmt = db.prepare('SELECT id FROM signature_users WHERE windows_username = ?');
   const insertStmt = db.prepare(`INSERT INTO signature_users
-    (windows_username, display_name, email, job_title, department, company, office_location,
+    (windows_username, display_name, name_suffix, email, job_title, department, company, office_location,
      phone, mobile, fax, street, city, postal_code, country, website, enabled, signature_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Firma_Standard')`);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Firma_Standard')`);
   const updateStmt = db.prepare(`UPDATE signature_users SET
-    display_name = ?, email = ?, job_title = ?, department = ?, company = ?, office_location = ?,
+    display_name = ?, name_suffix = ?, email = ?, job_title = ?, department = ?, company = ?, office_location = ?,
     phone = ?, mobile = ?, fax = ?, street = ?, city = ?, postal_code = ?, country = ?, website = ?,
     updated_at = CURRENT_TIMESTAMP
     WHERE windows_username = ?`);
@@ -233,6 +234,7 @@ userRoutes.post('/import-csv', requireAuth, (req, res) => {
       }
       const vals = [
         displayName,
+        rowValue(row, 'name_suffix'),
         rowValue(row, 'email'),
         rowValue(row, 'job_title'),
         rowValue(row, 'department'),
