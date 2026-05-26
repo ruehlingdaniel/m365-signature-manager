@@ -37,6 +37,25 @@ function esc(s) {
   }[c]));
 }
 
+// Frontend-Spiegel von backend/lib/renderer.js: {{#if}}/{{#unless}}-Bloecke + {{var}}.
+// Damit die Live-Preview vor dem Speichern bereits korrekt leere Felder ausblendet.
+function renderWithConditionals(html, ctx) {
+  const re = /\{\{#(if|unless)\s+([a-zA-Z0-9_.]+)\s*\}\}((?:(?!\{\{#(?:if|unless)\b)[\s\S])*?)\{\{\/\1\}\}/g;
+  let prev, out = String(html || '');
+  do {
+    prev = out;
+    out = out.replace(re, (_, kind, key, inner) => {
+      const v = key.split('.').reduce((a, p) => a == null ? a : a[p], ctx);
+      const truthy = v != null && String(v).trim() !== '';
+      return (kind === 'if' ? truthy : !truthy) ? inner : '';
+    });
+  } while (out !== prev);
+  return out.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, k) => {
+    const v = k.split('.').reduce((a, p) => a == null ? a : a[p], ctx);
+    return v == null ? '' : String(v);
+  });
+}
+
 function toast(message, type = 'info') {
   const colors = {
     info: 'bg-slate-800', success: 'bg-emerald-600', error: 'bg-red-600', warn: 'bg-amber-600',
@@ -119,6 +138,18 @@ const editorHelpers = {
       lang,
       height,
       buttonList: this.defaultButtonList,
+      font: [
+        'Calibri',
+        'Arial',
+        'Segoe UI',
+        'Verdana',
+        'Tahoma',
+        'Georgia',
+        'Times New Roman',
+        'Courier New',
+        'Trebuchet MS',
+        'Comic Sans MS',
+      ],
       defaultStyle: 'font-family: Calibri, Arial, sans-serif; font-size: 11pt;',
       defaultTag: 'div',
       addTagsWhitelist: 'table|tr|td|th|tbody|thead|tfoot',
@@ -488,7 +519,7 @@ async function openCsvImportModal() {
         <p class="text-slate-600">CSV mit Header-Zeile. Trennzeichen: Komma, Semikolon oder Tab. Pflicht-Spalten:
           <code class="bg-white px-1 rounded">windows_username</code> und
           <code class="bg-white px-1 rounded">display_name</code> (oder dt. Aliase wie „Anzeigename").</p>
-        <p class="text-slate-600 mt-1">Optionale Spalten: email, job_title, department, company, office_location, phone, mobile, fax, street, city, postal_code, country, website</p>
+        <p class="text-slate-600 mt-1">Optionale Spalten: name_suffix (z.B. ppa., Betriebswirt), email, job_title, department, company, office_location, phone, mobile, fax, street, city, postal_code, country, website</p>
         <p class="text-slate-600 mt-1">Bei vorhandenem <code class="bg-white px-1 rounded">windows_username</code> wird der Mitarbeiter aktualisiert (Upsert).</p>
       </div>
       <input id="csv-file" type="file" accept=".csv,text/csv" class="block w-full text-sm"/>
@@ -587,7 +618,7 @@ async function deploySingleUser(id) {
 
 async function openUserModal(id) {
   const user = id ? await api.get('/api/users/' + id) : {
-    windows_username: '', display_name: '', email: '', job_title: '', department: '',
+    windows_username: '', display_name: '', name_suffix: '', email: '', job_title: '', department: '',
     company: '', office_location: '', phone: '', mobile: '', fax: '',
     street: '', city: '', postal_code: '', country: '', website: '',
     signature_name: 'Firma_Standard', template_id: '', enabled: 1,
@@ -605,6 +636,11 @@ async function openUserModal(id) {
         <div>
           <label class="text-xs uppercase text-slate-500">Anzeigename *</label>
           <input data-f="display_name" value="${esc(user.display_name)}" class="w-full px-3 py-2 border rounded-lg"/>
+        </div>
+        <div>
+          <label class="text-xs uppercase text-slate-500">Namens-Zusatz</label>
+          <input data-f="name_suffix" value="${esc(user.name_suffix || '')}" class="w-full px-3 py-2 border rounded-lg" placeholder="z.B. ppa., Betriebswirt, M.Sc."/>
+          <p class="text-xs text-slate-400 mt-1">Erscheint unter dem Namen, leer = ausgeblendet</p>
         </div>
         <div>
           <label class="text-xs uppercase text-slate-500">E-Mail</label>
@@ -868,7 +904,12 @@ async function openTemplateModal(id, variables) {
         </button>
         <span class="text-slate-500 mx-2">|</span>
         <span class="text-slate-500 mr-1">Platzhalter:</span>
-        ${variables.map(v => `<button type="button" data-insert="{{${v.key}}}" class="bg-white hover:bg-blue-100 border px-2 py-0.5 rounded">{{${v.key}}}</button>`).join('')}
+        ${variables.map(v => `<button type="button" data-insert="{{${v.key}}}" class="bg-white hover:bg-blue-100 border px-2 py-0.5 rounded" title="${esc(v.label || '')}">{{${v.key}}}</button>`).join('')}
+        <span class="text-slate-500 mx-2">|</span>
+        <span class="text-slate-500 mr-1">Bedingt:</span>
+        <button type="button" data-insert="{{#if phone}}Tel: {{phone}}<br>{{/if}}" class="bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded" title="Block nur einfuegen, wenn Feld gefuellt ist">{{#if feld}}…{{/if}}</button>
+        <button type="button" data-insert="{{#unless phone}}<em>kein Telefon</em>{{/unless}}" class="bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded" title="Block nur einfuegen, wenn Feld leer ist">{{#unless feld}}…{{/unless}}</button>
+        <span class="text-slate-400 text-xs">Leere Felder werden mitsamt umgebendem Text ausgeblendet</span>
       </div>
 
       <!-- Editor links (breit) + Preview rechts -->
@@ -927,14 +968,15 @@ async function openTemplateModal(id, variables) {
     }
     const html = ed.getContents();
     const sample = {
-      displayName: 'Max Mustermann', jobTitle: 'Geschaeftsfuehrer', department: 'Vertrieb',
+      displayName: 'Max Mustermann', nameSuffix: 'ppa. / Betriebswirt',
+      jobTitle: 'Geschaeftsfuehrer', department: 'Vertrieb',
       company: 'Beispiel GmbH', office: 'Hauptsitz', email: 'max@example.com',
       phone: '+49 6341 1234567', mobile: '+49 170 1234567', fax: '+49 6341 1234568',
       street: 'Musterstr. 1', city: 'Musterstadt', postalCode: '12345', country: 'DE',
       website: 'https://example.com',
       logo: cachedLogoTag,
     };
-    const rendered = html.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => sample[k] != null ? sample[k] : '');
+    const rendered = renderWithConditionals(html, sample);
     body.querySelector('#tpl-preview').innerHTML = rendered;
   }
 
@@ -967,14 +1009,15 @@ function defaultTemplateHtml() {
 <tbody><tr>
 <td style="padding-right: 16px; border-right: 2px solid #2563eb; vertical-align: top;">
 <strong style="font-size: 13pt; color: #0f172a;">{{displayName}}</strong><br>
-<span style="color: #64748b;">{{jobTitle}}</span>
+{{#if nameSuffix}}<span style="color: #475569; font-size: 10pt;">{{nameSuffix}}</span><br>{{/if}}
+{{#if jobTitle}}<span style="color: #64748b;">{{jobTitle}}</span>{{/if}}
 </td>
 <td style="padding-left: 16px; vertical-align: top;">
-<strong>{{company}}</strong><br>
-{{street}}, {{postalCode}} {{city}}<br>
-Tel: {{phone}} &nbsp;|&nbsp; Mobil: {{mobile}}<br>
-<a href="mailto:{{email}}" style="color: #2563eb;">{{email}}</a> &nbsp;|&nbsp;
-<a href="{{website}}" style="color: #2563eb;">{{website}}</a>
+{{#if company}}<strong>{{company}}</strong><br>{{/if}}
+{{#if street}}{{street}}{{#if city}}, {{/if}}{{/if}}{{#if postalCode}}{{postalCode}} {{/if}}{{#if city}}{{city}}{{/if}}{{#if street}}<br>{{/if}}{{#unless street}}{{#if city}}<br>{{/if}}{{/unless}}
+{{#if phone}}Tel: {{phone}}{{/if}}{{#if phone}}{{#if mobile}} &nbsp;|&nbsp; {{/if}}{{/if}}{{#if mobile}}Mobil: {{mobile}}{{/if}}{{#if phone}}<br>{{/if}}{{#unless phone}}{{#if mobile}}<br>{{/if}}{{/unless}}
+{{#if fax}}Fax: {{fax}}<br>{{/if}}
+{{#if email}}<a href="mailto:{{email}}" style="color: #2563eb;">{{email}}</a>{{/if}}{{#if email}}{{#if website}} &nbsp;|&nbsp; {{/if}}{{/if}}{{#if website}}<a href="{{website}}" style="color: #2563eb;">{{website}}</a>{{/if}}
 </td>
 </tr></tbody></table>`;
 }

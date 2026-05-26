@@ -1,6 +1,40 @@
 /* Minimal-Erweiterungen zu Tailwind */
 .nav-link.active { background-color: rgb(51 65 85); color: white; font-weight: 600; }
 
+/* Calibri-Substitut: Carlito (Google/Red Hat, metrisch-identisch zu Calibri,
+   freie Lizenz). Wird als "Calibri" aliased, damit Editor-Preview und CSS-
+   font-family: Calibri auch auf Clients ohne Office (macOS/Linux) korrekt
+   gerendert werden. Auf den Windows-RDS mit installiertem Office wird beim
+   tatsaechlichen Outlook-Rendern weiterhin das echte Calibri benutzt. */
+@font-face {
+  font-family: 'Calibri';
+  src: url('/fonts/Carlito-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Calibri';
+  src: url('/fonts/Carlito-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Calibri';
+  src: url('/fonts/Carlito-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Calibri';
+  src: url('/fonts/Carlito-BoldItalic.ttf') format('truetype');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* Live-Preview Container */
 .sig-preview {
   background: white;

@@ -31,16 +31,59 @@ export function sanitize(html) {
 // Aktuell nur "logo" — bekommt vom Renderer ein <img>-Tag injiziert.
 const RAW_KEYS = new Set(['logo']);
 
+function lookup(context, key) {
+  return key.split('.').reduce((acc, part) => (acc == null ? acc : acc[part]), context);
+}
+
+function isTruthy(value) {
+  if (value == null) return false;
+  return String(value).trim() !== '';
+}
+
+// {{#if key}}...{{/if}} und {{#unless key}}...{{/unless}} (auch verschachtelt).
+// Negative Lookahead im Body sorgt dafuer, dass innerste Bloecke zuerst matchen —
+// damit nested if/unless korrekt nach innen abgewickelt wird.
+function processConditionals(html, context) {
+  const re = /\{\{#(if|unless)\s+([a-zA-Z0-9_.]+)\s*\}\}((?:(?!\{\{#(?:if|unless)\b)[\s\S])*?)\{\{\/\1\}\}/g;
+  let prev;
+  let out = String(html || '');
+  do {
+    prev = out;
+    out = out.replace(re, (_, kind, key, inner) => {
+      const truthy = isTruthy(lookup(context, key));
+      const show = kind === 'if' ? truthy : !truthy;
+      return show ? inner : '';
+    });
+  } while (out !== prev);
+  return out;
+}
+
+// Vorsichtige Aufraeumarbeiten nach Platzhalter-Ersetzung: ausschliesslich
+// strukturelle Whitespace-Reste, kein Label-Stripping (das wuerde echte Inhalte
+// kaputt machen). Echtes Ausblenden ganzer Zeilen erledigt der {{#if}}-Block.
+function cleanupEmptyArtifacts(html) {
+  let out = String(html || '');
+  // 1) aufeinanderfolgende <br> reduzieren ("<br><br>" -> "<br>")
+  out = out.replace(/(?:<br\s*\/?\s*>\s*){2,}/gi, '<br>');
+  // 2) <br> ganz am Anfang einer Block-Zelle weg
+  out = out.replace(/(<(?:td|th|p|div|li)[^>]*>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
+  // 3) <br> direkt vor schliessendem Block weg
+  out = out.replace(/(?:<br\s*\/?\s*>\s*)+(<\/(?:td|th|p|div|li)>)/gi, '$1');
+  return out;
+}
+
 // Replace {{variable}} placeholders with values from context
 export function renderTemplate(html, context) {
-  return (html || '').replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, key) => {
-    const value = key.split('.').reduce((acc, part) => (acc == null ? acc : acc[part]), context);
+  const conditionsResolved = processConditionals(html, context);
+  const replaced = conditionsResolved.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, key) => {
+    const value = lookup(context, key);
     if (value == null || value === '') return '';
     if (RAW_KEYS.has(key)) return String(value); // raw insert
     return String(value).replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
   });
+  return cleanupEmptyArtifacts(replaced);
 }
 
 // Liefert den HTML-Snippet fuer das zentrale Firmenlogo, basierend auf
@@ -60,6 +103,7 @@ export function buildContext(user) {
   try { custom = JSON.parse(user.custom_fields || '{}'); } catch {}
   return {
     displayName: user.display_name || '',
+    nameSuffix: user.name_suffix || '',
     windowsUsername: user.windows_username || '',
     jobTitle: user.job_title || '',
     department: user.department || '',
@@ -82,6 +126,7 @@ export function buildContext(user) {
 export const AVAILABLE_VARIABLES = [
   { key: 'logo', label: 'Firmenlogo (zentral)' },
   { key: 'displayName', label: 'Vollstaendiger Name' },
+  { key: 'nameSuffix', label: 'Namens-Zusatz (z.B. ppa., Betriebswirt)' },
   { key: 'jobTitle', label: 'Position / Titel' },
   { key: 'department', label: 'Abteilung' },
   { key: 'company', label: 'Firma' },
