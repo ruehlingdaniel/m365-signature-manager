@@ -106,8 +106,6 @@ m365-signature-manager/
 └── .env
 ```
 
-## Was noch fehlt / nice to have
-
 - Logo-Upload als zentral verwaltetes Asset (aktuell: Logo als `data:`-URI direkt im Template-HTML)
 - Bulk-Import von Mitarbeitern (CSV)
 - Scheduler für tägliches Auto-Deploy
