@@ -1,7 +1,8 @@
 FROM node:22-alpine AS base
 
 # samba-client liefert das smbclient-Binary fuer SMB-Push auf Windows-TS
-RUN apk add --no-cache samba-client tini
+# tzdata wird gebraucht, damit der TZ-Env-Var (Europe/Berlin) wirkt
+RUN apk add --no-cache samba-client tini tzdata
 
 WORKDIR /app
 
