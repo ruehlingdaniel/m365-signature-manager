@@ -73,7 +73,8 @@ function materializeUserSignature(user) {
   const txtPath = join(dir, `${signatureName}.txt`);
   const rtfPath = join(dir, `${signatureName}.rtf`);
   writeFileSync(htmPath, htm, 'utf8');
-  writeFileSync(txtPath, txt, 'utf8');
+  // txt ist ein CP1252-Buffer (kein UTF-8/BOM) — roh schreiben, KEIN Encoding-Arg.
+  writeFileSync(txtPath, txt);
   writeFileSync(rtfPath, rtf, 'utf8');
 
   const files = [

@@ -38,7 +38,95 @@ function esc(s) {
 }
 
 // Frontend-Spiegel von backend/lib/renderer.js: {{#if}}/{{#unless}}-Bloecke + {{var}}.
-// Damit die Live-Preview vor dem Speichern bereits korrekt leere Felder ausblendet.
+// Damit die Live-Preview vor dem Speichern bereits korrekt leere Felder ausblendet —
+// inkl. Block-Collapse: <p>{{x}}</p> mit leerem x verschwindet komplett (kein
+// "Rahmen" / Leerraum mehr um leere Platzhalter).
+const SIG_OPT_MARKER = '<!--SIG-OPT-->';
+
+function isBlockVisuallyEmpty(inner) {
+  let s = String(inner || '');
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/<br\s*\/?\s*>/gi, '');
+    s = s.replace(/&nbsp;|&#160;|&#x200B;|&#8203;|&zwnj;|&#8204;/gi, '');
+    s = s.replace(/[ ​‌﻿]/g, '');
+    s = s.replace(/<(span|font|b|strong|em|i|u)\b[^>]*>\s*<\/\1>/gi, '');
+    s = s.trim();
+  } while (s !== prev);
+  return s === '';
+}
+
+function markPlaceholderBlocks(html) {
+  return String(html || '').replace(
+    /<(p|div|li|h[1-6])\b([^>]*)>((?:(?!<\1\b)[\s\S])*?)<\/\1>/gi,
+    (match, tag, attrs, inner) => {
+      if (!/\{\{\s*[a-zA-Z0-9_.]+\s*\}\}/.test(inner)) return match;
+      if (inner.includes(SIG_OPT_MARKER)) return match;
+      return `<${tag}${attrs}>${SIG_OPT_MARKER}${inner}</${tag}>`;
+    },
+  );
+}
+
+function dropEmptyMarkedBlocks(html) {
+  const re = /<(p|div|li|h[1-6])\b([^>]*)>((?:(?!<\1\b)[\s\S])*?)<\/\1>/gi;
+  let out = String(html || '');
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(re, (match, tag, attrs, inner) => {
+      const idx = inner.indexOf(SIG_OPT_MARKER);
+      if (idx === -1) return match;
+      const after = inner.slice(0, idx) + inner.slice(idx + SIG_OPT_MARKER.length);
+      if (isBlockVisuallyEmpty(after)) return '';
+      return `<${tag}${attrs}>${after}</${tag}>`;
+    });
+  } while (out !== prev);
+  return out.split(SIG_OPT_MARKER).join('');
+}
+
+function cleanupEmptyArtifacts(html) {
+  let out = String(html || '');
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(/<(span|font|b|strong|em|i|u)\b[^>]*>(?:\s|&nbsp;|&#160;|&#8203;|&zwnj;|​)*<\/\1>/gi, '');
+    out = out.replace(/(<(?:td|th|p|div|li)[^>]*>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
+  } while (out !== prev);
+  return out;
+}
+
+// Drei Muster, vor der Substitution angewandt, entfernen <br />s, die direkt
+// an leeren Platzhaltern haengen — strukturelle BRs (z.B. <br /><br /> als
+// Absatz-Luecke vor dem Logo) bleiben unangetastet.
+function dropPlaceholderBrs(html, ctx) {
+  function isEmpty(key) {
+    const v = key.split('.').reduce((a, p) => a == null ? a : a[p], ctx);
+    return v == null || String(v).trim() === '';
+  }
+  let out = String(html || '');
+  let prev;
+  do {
+    prev = out;
+    // 1) {{a}}<br />{{b}} direkt benachbart
+    out = out.replace(
+      /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\s*<br\s*\/?\s*>\s*\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g,
+      (full, a, b) => (isEmpty(a) || isEmpty(b)) ? `{{${a}}}{{${b}}}` : full,
+    );
+    // 2) {{a}}<br /> kurz vor Block-Close
+    out = out.replace(
+      /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}((?:\s|<\/(?:span|font|b|strong|em|i|u)[^>]*>)*)<br\s*\/?\s*>((?:\s|<\/(?:span|font|b|strong|em|i|u)[^>]*>)*<\/(?:p|div|li|td|th)>)/g,
+      (full, key, mid, tail) => isEmpty(key) ? `{{${key}}}${mid}${tail}` : full,
+    );
+    // 3) Block-Open + <br /> + {{a}}
+    out = out.replace(
+      /(<(?:p|div|li|td|th)[^>]*>(?:\s|<(?:span|font|b|strong|em|i|u)[^>]*>)*)<br\s*\/?\s*>((?:\s|<(?:span|font|b|strong|em|i|u)[^>]*>)*)\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g,
+      (full, head, mid, key) => isEmpty(key) ? `${head}${mid}{{${key}}}` : full,
+    );
+  } while (out !== prev);
+  return out;
+}
+
 function renderWithConditionals(html, ctx) {
   const re = /\{\{#(if|unless)\s+([a-zA-Z0-9_.]+)\s*\}\}((?:(?!\{\{#(?:if|unless)\b)[\s\S])*?)\{\{\/\1\}\}/g;
   let prev, out = String(html || '');
@@ -50,10 +138,13 @@ function renderWithConditionals(html, ctx) {
       return (kind === 'if' ? truthy : !truthy) ? inner : '';
     });
   } while (out !== prev);
-  return out.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, k) => {
+  out = dropPlaceholderBrs(out, ctx);
+  const marked = markPlaceholderBlocks(out);
+  const replaced = marked.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, k) => {
     const v = k.split('.').reduce((a, p) => a == null ? a : a[p], ctx);
     return v == null ? '' : String(v);
   });
+  return cleanupEmptyArtifacts(dropEmptyMarkedBlocks(replaced));
 }
 
 function toast(message, type = 'info') {
