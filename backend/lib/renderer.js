@@ -58,24 +58,133 @@ function processConditionals(html, context) {
   return out;
 }
 
-// Vorsichtige Aufraeumarbeiten nach Platzhalter-Ersetzung: ausschliesslich
-// strukturelle Whitespace-Reste, kein Label-Stripping (das wuerde echte Inhalte
-// kaputt machen). Echtes Ausblenden ganzer Zeilen erledigt der {{#if}}-Block.
+// Aufraeumarbeiten nach Substitution:
+// - leere Inline-Wrapper entfernen (z.B. <span></span> aus leerem Platzhalter)
+// - <br/>s am Block-Anfang strippen (entstehen, wenn die ersten Platzhalter
+//   leer sind und nach Empty-Inline-Cleanup nur noch ein verwaister <br/> uebrig
+//   bleibt). Iterativ, damit Empty-Span und BR-Trimm sich gegenseitig triggern.
+// Bewusst NICHT getrimmt: <br/>s am Block-Ende — die koennen vom Benutzer
+// gewollt sein, um eine Absatz-Luecke vor dem naechsten Element (z.B. Logo)
+// zu erzeugen.
 function cleanupEmptyArtifacts(html) {
   let out = String(html || '');
-  // 1) aufeinanderfolgende <br> reduzieren ("<br><br>" -> "<br>")
-  out = out.replace(/(?:<br\s*\/?\s*>\s*){2,}/gi, '<br>');
-  // 2) <br> ganz am Anfang einer Block-Zelle weg
-  out = out.replace(/(<(?:td|th|p|div|li)[^>]*>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
-  // 3) <br> direkt vor schliessendem Block weg
-  out = out.replace(/(?:<br\s*\/?\s*>\s*)+(<\/(?:td|th|p|div|li)>)/gi, '$1');
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(/<(span|font|b|strong|em|i|u)\b[^>]*>(?:\s|&nbsp;|&#160;|&#8203;|&zwnj;|​)*<\/\1>/gi, '');
+    out = out.replace(/(<(?:td|th|p|div|li)[^>]*>)\s*(?:<br\s*\/?\s*>\s*)+/gi, '$1');
+  } while (out !== prev);
+  return out;
+}
+
+const SIG_OPT_MARKER = '<!--SIG-OPT-->';
+
+// Bloecke (p/div/li/h1-h6), die mind. einen {{placeholder}} enthalten, werden
+// markiert. So koennen wir spaeter erkennen, ob ein Block durch leere
+// Platzhalter-Substitution leer geworden ist — und nur in diesem Fall die Zeile
+// entfernen. Absichtlich leere Spacer-Bloecke (<p><br/></p> ohne Placeholder)
+// bleiben dadurch erhalten.
+function markPlaceholderBlocks(html) {
+  return String(html || '').replace(
+    /<(p|div|li|h[1-6])\b([^>]*)>((?:(?!<\1\b)[\s\S])*?)<\/\1>/gi,
+    (match, tag, attrs, inner) => {
+      if (!/\{\{\s*[a-zA-Z0-9_.]+\s*\}\}/.test(inner)) return match;
+      if (inner.includes(SIG_OPT_MARKER)) return match;
+      return `<${tag}${attrs}>${SIG_OPT_MARKER}${inner}</${tag}>`;
+    },
+  );
+}
+
+// Pruefen, ob der "sichtbare" Inhalt eines Blocks leer ist: <br>, &nbsp;,
+// zero-width chars und leere Inline-Wrapper (span/font/b/strong/em/i/u) werden
+// rekursiv abgeraeumt; bleibt etwas uebrig → Block hat echten Inhalt.
+function isBlockVisuallyEmpty(inner) {
+  let s = String(inner || '');
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/<br\s*\/?\s*>/gi, '');
+    s = s.replace(/&nbsp;|&#160;|&#x200B;|&#8203;|&zwnj;|&#8204;/gi, '');
+    s = s.replace(/[ ​‌﻿]/g, '');
+    // Leere Inline-Wrapper entfernen (kann sich nach dem Strippen ergeben)
+    s = s.replace(/<(span|font|b|strong|em|i|u)\b[^>]*>\s*<\/\1>/gi, '');
+    s = s.trim();
+  } while (s !== prev);
+  return s === '';
+}
+
+// Markierte Bloecke nach der Substitution auswerten: leere weg, sonst Marker
+// entfernen. Iterativ, damit das auch nach Entfernen innerer Bloecke noch
+// einmal greift (z.B. <div> wird leer, weil enthaltener <p> entfernt wurde
+// — aber nur, wenn das <div> selbst markiert war, sonst bleibt es).
+function dropEmptyMarkedBlocks(html) {
+  const re = /<(p|div|li|h[1-6])\b([^>]*)>((?:(?!<\1\b)[\s\S])*?)<\/\1>/gi;
+  let out = String(html || '');
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(re, (match, tag, attrs, inner) => {
+      const idx = inner.indexOf(SIG_OPT_MARKER);
+      if (idx === -1) return match;
+      const after = inner.slice(0, idx) + inner.slice(idx + SIG_OPT_MARKER.length);
+      if (isBlockVisuallyEmpty(after)) return '';
+      return `<${tag}${attrs}>${after}</${tag}>`;
+    });
+  } while (out !== prev);
+  // Falls ein Marker durch Verschachtelung uebrig geblieben ist, raus damit.
+  return out.split(SIG_OPT_MARKER).join('');
+}
+
+// Entfernt <br />s, die direkt an leeren Platzhaltern haengen — vor der
+// Substitution, damit nur "verwaiste" BRs (die durch leere Platzhalter ueber-
+// fluessig werden) verschwinden. Strukturelle BRs (z.B. <br /><br /> am Ende
+// eines Blocks, das eine Absatz-Luecke vor dem naechsten Element erzeugt) bleiben.
+//
+// Drei Muster:
+//   1) "{{a}}<br />{{b}}" direkt benachbart — BR weg wenn einer leer
+//   2) "{{a}}<br />" an Inline/Block-Grenze (nur schliessende Inline-Tags
+//      bis zum naechsten Block-Close) — BR weg wenn a leer
+//   3) "<br />{{a}}" an Inline/Block-Grenze (nur oeffnende Inline-Tags vom
+//      letzten Block-Open) — BR weg wenn a leer
+function dropPlaceholderBrs(html, context) {
+  function isEmpty(key) {
+    const v = lookup(context, key);
+    return v == null || String(v).trim() === '';
+  }
+
+  let out = String(html || '');
+  let prev;
+  do {
+    prev = out;
+
+    // 1) {{a}}<br />{{b}} direkt benachbart
+    out = out.replace(
+      /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\s*<br\s*\/?\s*>\s*\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g,
+      (full, a, b) => (isEmpty(a) || isEmpty(b)) ? `{{${a}}}{{${b}}}` : full,
+    );
+
+    // 2) {{a}}<br /> gefolgt von schliessenden Inline-Tags und dann Block-Close
+    out = out.replace(
+      /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}((?:\s|<\/(?:span|font|b|strong|em|i|u)[^>]*>)*)<br\s*\/?\s*>((?:\s|<\/(?:span|font|b|strong|em|i|u)[^>]*>)*<\/(?:p|div|li|td|th)>)/g,
+      (full, key, mid, tail) => isEmpty(key) ? `{{${key}}}${mid}${tail}` : full,
+    );
+
+    // 3) Block-Open + <br /> + {{a}} (a leer)
+    out = out.replace(
+      /(<(?:p|div|li|td|th)[^>]*>(?:\s|<(?:span|font|b|strong|em|i|u)[^>]*>)*)<br\s*\/?\s*>((?:\s|<(?:span|font|b|strong|em|i|u)[^>]*>)*)\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g,
+      (full, head, mid, key) => isEmpty(key) ? `${head}${mid}{{${key}}}` : full,
+    );
+
+  } while (out !== prev);
   return out;
 }
 
 // Replace {{variable}} placeholders with values from context
 export function renderTemplate(html, context) {
   const conditionsResolved = processConditionals(html, context);
-  const replaced = conditionsResolved.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, key) => {
+  const brsReduced = dropPlaceholderBrs(conditionsResolved, context);
+  const marked = markPlaceholderBlocks(brsReduced);
+  const replaced = marked.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_, key) => {
     const value = lookup(context, key);
     if (value == null || value === '') return '';
     if (RAW_KEYS.has(key)) return String(value); // raw insert
@@ -83,7 +192,8 @@ export function renderTemplate(html, context) {
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
   });
-  return cleanupEmptyArtifacts(replaced);
+  const trimmedBlocks = dropEmptyMarkedBlocks(replaced);
+  return cleanupEmptyArtifacts(trimmedBlocks);
 }
 
 // Liefert den HTML-Snippet fuer das zentrale Firmenlogo, basierend auf

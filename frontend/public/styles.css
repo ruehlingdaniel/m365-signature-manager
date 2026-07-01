@@ -47,6 +47,17 @@
   color: #0f172a;
 }
 .sig-preview img { max-width: 100%; height: auto; }
+/* Aus dem Editor importierter HTML enthaelt oft inline-styles wie
+   "border-style:solid; border-color:#e5e7eb" (Tailwind/Outlook-Reset-Reste).
+   Zusammen mit Tailwinds Preflight kann das im Preview als sichtbarer Rahmen
+   um Platzhalter-Span/Block landen. Wir erzwingen border-width:0 fuer alle
+   Kinder — falls jemand absichtlich einen Rahmen will, muss er border-width
+   explizit setzen. */
+.sig-preview *,
+.sig-preview *::before,
+.sig-preview *::after {
+  border-width: 0;
+}
 
 /* HTML-Code-Textarea monospace */
 textarea.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
